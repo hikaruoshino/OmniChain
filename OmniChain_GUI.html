@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniChain v6.0 Web Config Editor</title>
+    <style>
+        :root {
+            --bg: #0f141d;
+            --card: #18202c;
+            --accent: #4f46e5;
+            --accent-hover: #6366f1;
+            --text: #f3f4f6;
+            --sub: #9ca3af;
+            --border: #2d3848;
+            --success: #10b981;
+            --danger: #ef4444;
+        }
+        body {
+            font-family: 'Segoe UI', Meiryo, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 950px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid var(--border);
+        }
+        h1 {
+            color: #818cf8;
+            margin: 0 0 8px 0;
+            font-size: 26px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        h2 {
+            font-size: 17px;
+            margin-top: 0;
+            color: #a5b4fc;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+            margin-bottom: 15px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-size: 13px;
+            color: var(--sub);
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        select, input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: #e5e7eb;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        select:focus, input:focus {
+            outline: none;
+            border-color: #818cf8;
+        }
+        .ws-list {
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            min-height: 220px;
+            max-height: 380px;
+            overflow-y: auto;
+        }
+        .ws-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #1f2937;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            border: 1px solid #374151;
+            cursor: grab;
+            transition: background 0.15s;
+        }
+        .ws-item:hover {
+            background: #374151;
+        }
+        .ws-badge {
+            background: #4338ca;
+            color: #e0e7ff;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 2px 7px;
+            border-radius: 4px;
+            margin-right: 8px;
+        }
+        .ws-title {
+            font-weight: bold;
+            flex: 1;
+            font-size: 14px;
+        }
+        .btn-group {
+            display: flex;
+            gap: 3px;
+        }
+        .btn {
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: bold;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-sm {
+            padding: 3px 7px;
+            font-size: 12px;
+            border-radius: 4px;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        .btn-success:hover {
+            background: #059669;
+        }
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        .btn-action {
+            background: #374151;
+            color: #d1d5db;
+        }
+        .btn-action:hover {
+            background: #4b5563;
+            color: white;
+        }
+        .add-box {
+            background: #111827;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            margin-top: 12px;
+        }
+        footer {
+            margin-top: 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
+        }
+        .file-upload-btn {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+        .file-upload-btn input[type=file] {
+            font-size: 100px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .search-box {
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚔️ OmniChain v6.0 - Web Config Editor</h1>
+            <p style="color: var(--sub); margin:0; font-size:14px;">全22ジョブ ＆ 全14武器種 (139種類以上) 対応 WS優先順位設定・管理ツール</p>
+        </header>
+        
+        <div class="grid">
+            <!-- 1. ジョブ＆基本設定 -->
+            <div class="card">
+                <h2>1. 対象ジョブ ＆ 装備武器種の設定</h2>
+                
+                <div class="form-group">
+                    <label>対象ジョブ (Job):</label>
+                    <select id="jobSelect" onchange="onJobChange()">
+                        <option value="WAR">戦士 (WAR)</option>
+                        <option value="PLD">ナイト (PLD)</option>
+                        <option value="SAM">侍 (SAM)</option>
+                        <option value="THF">シーフ (THF)</option>
+                        <option value="DRK">暗黒騎士 (DRK)</option>
+                        <option value="DRG">竜騎士 (DRG)</option>
+                        <option value="MNK">モンク (MNK)</option>
+                        <option value="RDM">赤魔道士 (RDM)</option>
+                        <option value="BLU">青魔道士 (BLU)</option>
+                        <option value="COR">コルセア (COR)</option>
+                        <option value="DNC">踊り子 (DNC)</option>
+                        <option value="RUN">魔導剣士 (RUN)</option>
+                        <option value="RNG">狩人 (RNG)</option>
+                        <option value="NIN">忍者 (NIN)</option>
+                        <option value="BST">獣使い (BST)</option>
+                        <option value="BRD">吟遊詩人 (BRD)</option>
+                        <option value="PUP">からくり士 (PUP)</option>
+                        <option value="SCH">学者 (SCH)</option>
+                        <option value="GEO">風水士 (GEO)</option>
+                        <option value="WHM">白魔道士 (WHM)</option>
+                        <option value="BLM">黒魔道士 (BLM)</option>
+                        <option value="SMN">召喚士 (SMN)</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>メイン装備武器種:</label>
+                    <select id="weaponSelect" onchange="onWeaponChange()">
+                        <option value="両手斧">両手斧</option>
+                        <option value="片手斧">片手斧</option>
+                        <option value="片手剣">片手剣</option>
+                        <option value="両手剣">両手剣</option>
+                        <option value="短剣">短剣</option>
+                        <option value="両手刀">両手刀</option>
+                        <option value="片手刀">片手刀</option>
+                        <option value="両手槍">両手槍</option>
+                        <option value="両手鎌">両手鎌</option>
+                        <option value="格闘">格闘</option>
+                        <option value="片手棍">片手棍</option>
+                        <option value="両手棍">両手棍</option>
+                        <option value="弓術">弓術</option>
+                        <option value="射撃">射撃</option>
+                    </select>
+                </div>
+
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>最小発動TP (Min TP):</label>
+                    <input type="number" id="minTpInput" value="1000" min="1000" max="3000" step="100" onchange="onGlobalConfigChange()">
+                </div>
+            </div>
+            
+            <!-- 2. WS優先順位設定 -->
+            <div class="card">
+                <h2>2. WS優先順位 (Priority) リスト編集</h2>
+                
+                <div id="wsList" class="ws-list">
+                    <!-- 動的描写 -->
+                </div>
+                
+                <!-- WS追加コントロール -->
+                <div class="add-box">
+                    <label style="color:#a5b4fc; margin-bottom:8px;">＋ WSの追加 (全武器種・全139種対応):</label>
+                    
+                    <div class="form-group" style="margin-bottom:8px;">
+                        <select id="categoryFilter" onchange="populateAddWsSelect()">
+                            <option value="CURRENT">選択中の武器種のみ</option>
+                            <option value="ALL">★全武器種の全WS表示 (139種類)</option>
+                            <option value="格闘">格闘 WS</option>
+                            <option value="短剣">短剣 WS</option>
+                            <option value="片手剣">片手剣 WS</option>
+                            <option value="両手剣">両手剣 WS</option>
+                            <option value="片手斧">片手斧 WS</option>
+                            <option value="両手斧">両手斧 WS</option>
+                            <option value="両手鎌">両手鎌 WS</option>
+                            <option value="両手槍">両手槍 WS</option>
+                            <option value="片手刀">片手刀 WS</option>
+                            <option value="両手刀">両手刀 WS</option>
+                            <option value="片手棍">片手棍 WS</option>
+                            <option value="両手棍">両手棍 WS</option>
+                            <option value="弓術">弓術 WS</option>
+                            <option value="射撃">射撃 WS</option>
+                        </select>
+                    </div>
+
+                    <div class="search-box">
+                        <input type="text" id="wsSearchInput" placeholder="🔍 絞り込み検索 (例: サベ, 不動, ルドラ...)" oninput="populateAddWsSelect()">
+                    </div>
+                    
+                    <div style="display:flex; gap:8px;">
+                        <select id="addWsSelect" style="flex:1;">
+                            <!-- 動的生成 -->
+                        </select>
+                        <button class="btn btn-primary" onclick="addSelectedWS()">リストに追加</button>
+                    </div>
+
+                    <div style="margin-top:10px; border-top:1px dashed #374151; padding-top:8px;">
+                        <label style="font-size:12px; color:#9ca3af;">自由入力 (リストにないカスタムWS名):</label>
+                        <div style="display:flex; gap:8px; margin-top:4px;">
+                            <input type="text" id="customWsInput" placeholder="WS名を直接入力">
+                            <button class="btn btn-action" onclick="addCustomWS()">直接追加</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <div class="file-upload-btn">
+                <button class="btn btn-action">📁 omnichain_config.json を読み込む</button>
+                <input type="file" id="jsonFileInput" accept=".json" onchange="importJSON(event)">
+            </div>
+            
+            <button class="btn btn-success" style="font-size:15px; padding:12px 24px;" onclick="exportJSON()">💾 omnichain_config.json を保存・ダウンロード</button>
+        </footer>
+    </div>
+
+    <script>
+        const wsDict = {
+    "格闘": [
+        "コンボ",
+        "タックル",
+        "短勁",
+        "バックハンドブロー",
+        "乱撃",
+        "スピンアタック",
+        "空鳴拳",
+        "双竜脚",
+        "夢想阿修羅拳",
+        "闘魂旋風脚",
+        "ファイナルヘヴン",
+        "アスケーテンツォルン",
+        "連環六合圏",
+        "ビクトリースマイト",
+        "四神円舞",
+        "マルカラ"
+    ],
+    "短剣": [
+        "ワスプスティング",
+        "バイパーバイト",
+        "シャドーステッチ",
+        "ガストスラッシュ",
+        "サイクロン",
+        "エナジースティール",
+        "エナジードレイン",
+        "ダンシングエッジ",
+        "シャークバイト",
+        "エヴィサレーション",
+        "マーシーストローク",
+        "マンダリクスタッブ",
+        "モーダントライム",
+        "ピリッククレオス",
+        "ルドラストーム",
+        "イオリアンエッジ"
+    ],
+    "片手剣": [
+        "ファストブレード",
+        "バーニングブレード",
+        "レッドブレード",
+        "フラットブレード",
+        "サークルブレード",
+        "スピリッツウィズイン",
+        "ボーパルブレード",
+        "スウィフトブレード",
+        "サベッジブレード",
+        "サンギンブレード",
+        "レクイエスカット",
+        "シャンデュシニュ",
+        "ロズレーファタール",
+        "ロイエ",
+        "ナイツオブラウンド"
+    ],
+    "両手剣": [
+        "ハードスラッシュ",
+        "パワースラッシュ",
+        "フロストバイト",
+        "フリーズバイト",
+        "ショックウェーブ",
+        "スピンスラッシュ",
+        "グラウンドストライク",
+        "スピノサウルス",
+        "デミディエーション",
+        "レゾルーション",
+        "トアクリーバー",
+        "スカージ"
+    ],
+    "片手斧": [
+        "アバランシュ",
+        "ライノアタック",
+        "ランページ",
+        "カラミティ",
+        "ミストラルアクス",
+        "デシメーション",
+        "ルイネーター",
+        "オンスロート",
+        "クラウドスプリッタ"
+    ],
+    "両手斧": [
+        "シールドブレイク",
+        "アイアンペスタ",
+        "パワーブレイク",
+        "フルブレイク",
+        "レイジングラッシュ",
+        "スチールサイクロン",
+        "キングズジャスティス",
+        "ウッコフューリー",
+        "アップヒーバル",
+        "メタトロントーメント",
+        "フェルクリーヴ"
+    ],
+    "両手鎌": [
+        "ナイトメア",
+        "スライス",
+        "ダークハーベスト",
+        "シャドーアイ",
+        "ギロティン",
+        "クロスリーパー",
+        "スパイラルヘル",
+        "エントロピー",
+        "クワイタス",
+        "カタストロフィ",
+        "インサージェンシー"
+    ],
+    "両手槍": [
+        "ダブルスラスト",
+        "サンダースラスト",
+        "ライデンスラスト",
+        "ソニックスラスト",
+        "ペンタスラスト",
+        "大車輪",
+        "インパルスドライヴ",
+        "スターダイバー",
+        "カムラン",
+        "雲蒸竜変",
+        "ゲイルスコグル"
+    ],
+    "片手刀": [
+        "刃・臨",
+        "刃・忍",
+        "刃・空",
+        "刃・迅",
+        "刃・天",
+        "刃・地",
+        "刃・秘",
+        "刃・瞬",
+        "生者必滅"
+    ],
+    "両手刀": [
+        "太刀・燕飛",
+        "太刀・陣風",
+        "太刀・光輝",
+        "太刀・雪風",
+        "太刀・月光",
+        "太刀・花車",
+        "十二之太刀・照破",
+        "祖之太刀・不動",
+        "零之太刀・回天",
+        "十之太刀・乱鴉"
+    ],
+    "片手棍": [
+        "シャインブレイン",
+        "ヘヴィブレイン",
+        "ブレインクラッシュ",
+        "セラフィストライク",
+        "ジャッジメント",
+        "ヘキサストライク",
+        "ブラックヘイロー",
+        "レルムレイザー",
+        "エクズデーション",
+        "フラッシュノヴァ",
+        "ランドグリース"
+    ],
+    "両手棍": [
+        "ヘヴィスイング",
+        "ロッククラッシュ",
+        "アースクラッシャー",
+        "スターバースト",
+        "サンバースト",
+        "レトリビューション",
+        "カタクリスム",
+        "シャッターソウル",
+        "オムニシエンス",
+        "ミルキル",
+        "ヴィゾフニル",
+        "ガーランドオブブリス"
+    ],
+    "弓術": [
+        "フラミングアロー",
+        "ピピアロー",
+        "ブラストアロー",
+        "アーチアロー",
+        "エンピリアルアロー",
+        "リフレクアロー",
+        "ジシュヌの光輝",
+        "エイペクスアロー",
+        "南無八幡"
+    ],
+    "射撃": [
+        "ホットショット",
+        "スプリットショット",
+        "スナイパーショット",
+        "スラッグショット",
+        "デトネーター",
+        "ラストスタンド",
+        "ワイルドファイア",
+        "レデンサリュート",
+        "コロナルフライ"
+    ]
+};
+
+        let configData = {
+            "enabled": true,
+            "min_tp": 1000,
+            "party_sync": true,
+            "auto_mode": "flexible",
+            "wait_delay": 1.2,
+            "profiles": {
+                "WAR": { "weapon": "両手斧", "ws_priority": ["アップヒーバル", "ウッコフューリー", "キングズジャスティス", "フェルクリーヴ"] },
+                "PLD": { "weapon": "片手剣", "ws_priority": ["サベッジブレード", "シャンデュシニュ", "ボーパルブレード", "ロイエ"] },
+                "SAM": { "weapon": "両手刀", "ws_priority": ["祖之太刀・不動", "十二之太刀・照破", "九之太刀・花車", "八之太刀・月光"] },
+                "THF": { "weapon": "短剣", "ws_priority": ["ルドラストーム", "エヴィサレーション", "イオリアンエッジ", "マンダリクスタッブ"] },
+                "DRK": { "weapon": "両手鎌", "ws_priority": ["クロスリーパー", "エントロピー", "カタストロフィ", "クワイタス"] },
+                "RNG": { "weapon": "弓術", "ws_priority": ["ジシュヌの光輝", "エイペクスアロー", "南無八幡", "エンピリアルアロー"] },
+                "NIN": { "weapon": "片手刀", "ws_priority": ["刃・瞬", "刃・秘", "刃・迅", "刃・天"] },
+                "DRG": { "weapon": "両手槍", "ws_priority": ["インパルスドライヴ", "カムラン", "スターダイバー", "大車輪"] },
+                "RDM": { "weapon": "片手剣", "ws_priority": ["サベッジブレード", "シャンデュシニュ", "ロズレーファタール", "サンギンブレード"] },
+                "BLU": { "weapon": "片手剣", "ws_priority": ["サベッジブレード", "シャンデュシニュ", "レクイエスカット"] },
+                "COR": { "weapon": "射撃", "ws_priority": ["レデンサリュート", "ラストスタンド", "ワイルドファイア"] },
+                "DNC": { "weapon": "短剣", "ws_priority": ["ピリッククレオス", "ルドラストーム", "エヴィサレーション"] },
+                "RUN": { "weapon": "両手剣", "ws_priority": ["デミディエーション", "トアクリーバー", "レゾルーション"] }
+            }
+        };
+
+        let draggedIdx = null;
+
+        function renderPriorityList() {
+            const job = document.getElementById('jobSelect').value;
+            const listDiv = document.getElementById('wsList');
+            listDiv.innerHTML = '';
+            
+            if (!configData.profiles[job]) {
+                configData.profiles[job] = { "weapon": "片手剣", "ws_priority": [] };
+            }
+
+            const priorityList = configData.profiles[job].ws_priority || [];
+
+            if (priorityList.length === 0) {
+                listDiv.innerHTML = '<div style="color:#6b7280; text-align:center; padding:30px;">WSが登録されていません。<br>下の追加からWSを選択してください。</div>';
+                return;
+            }
+
+            priorityList.forEach((ws, idx) => {
+                const item = document.createElement('div');
+                item.className = 'ws-item';
+                item.draggable = true;
+                
+                item.ondragstart = (e) => { draggedIdx = idx; e.dataTransfer.effectAllowed = 'move'; };
+                item.ondragover = (e) => { e.preventDefault(); };
+                item.ondrop = (e) => {
+                    e.preventDefault();
+                    if (draggedIdx !== null && draggedIdx !== idx) {
+                        const temp = priorityList[draggedIdx];
+                        priorityList.splice(draggedIdx, 1);
+                        priorityList.splice(idx, 0, temp);
+                        renderPriorityList();
+                    }
+                };
+
+                item.innerHTML = `
+                    <span class="ws-badge">優先度 ${idx + 1}</span>
+                    <span class="ws-title">${ws}</span>
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-action" title="最優先へ" onclick="moveWS(${idx}, 'top')">🔝</button>
+                        <button class="btn btn-sm btn-action" title="1つ上へ" onclick="moveWS(${idx}, -1)">▲</button>
+                        <button class="btn btn-sm btn-action" title="1つ下へ" onclick="moveWS(${idx}, 1)">▼</button>
+                        <button class="btn btn-sm btn-action" title="最下位へ" onclick="moveWS(${idx}, 'bottom')">🔻</button>
+                        <button class="btn btn-sm btn-danger" title="削除" onclick="removeWS(${idx})">削除</button>
+                    </div>
+                `;
+                listDiv.appendChild(item);
+            });
+        }
+
+        function moveWS(idx, action) {
+            const job = document.getElementById('jobSelect').value;
+            const list = configData.profiles[job].ws_priority;
+            
+            if (action === 'top') {
+                const item = list.splice(idx, 1)[0];
+                list.unshift(item);
+            } else if (action === 'bottom') {
+                const item = list.splice(idx, 1)[0];
+                list.push(item);
+            } else if (typeof action === 'number') {
+                const targetIdx = idx + action;
+                if (targetIdx >= 0 && targetIdx < list.length) {
+                    const temp = list[idx];
+                    list[idx] = list[targetIdx];
+                    list[targetIdx] = temp;
+                }
+            }
+            renderPriorityList();
+        }
+
+        function removeWS(idx) {
+            const job = document.getElementById('jobSelect').value;
+            configData.profiles[job].ws_priority.splice(idx, 1);
+            renderPriorityList();
+        }
+
+        function addSelectedWS() {
+            const job = document.getElementById('jobSelect').value;
+            const ws = document.getElementById('addWsSelect').value;
+            if (ws) {
+                if (!configData.profiles[job].ws_priority) {
+                    configData.profiles[job].ws_priority = [];
+                }
+                if (!configData.profiles[job].ws_priority.includes(ws)) {
+                    configData.profiles[job].ws_priority.push(ws);
+                    renderPriorityList();
+                }
+            }
+        }
+
+        function addCustomWS() {
+            const job = document.getElementById('jobSelect').value;
+            const input = document.getElementById('customWsInput');
+            const ws = input.value.trim();
+            if (ws) {
+                if (!configData.profiles[job].ws_priority) {
+                    configData.profiles[job].ws_priority = [];
+                }
+                if (!configData.profiles[job].ws_priority.includes(ws)) {
+                    configData.profiles[job].ws_priority.push(ws);
+                    input.value = '';
+                    renderPriorityList();
+                }
+            }
+        }
+
+        function populateAddWsSelect() {
+            const filterCategory = document.getElementById('categoryFilter').value;
+            const currentWeapon = document.getElementById('weaponSelect').value;
+            const filterText = document.getElementById('wsSearchInput').value.trim().toLowerCase();
+            const select = document.getElementById('addWsSelect');
+            select.innerHTML = '';
+
+            let candidateList = [];
+
+            if (filterCategory === 'CURRENT') {
+                candidateList = wsDict[currentWeapon] || [];
+            } else if (filterCategory === 'ALL') {
+                let set = new Set();
+                Object.values(wsDict).forEach(arr => arr.forEach(w => set.add(w)));
+                candidateList = Array.from(set);
+            } else if (wsDict[filterCategory]) {
+                candidateList = wsDict[filterCategory];
+            }
+
+            if (filterText) {
+                candidateList = candidateList.filter(w => w.toLowerCase().includes(filterText));
+            }
+
+            if (candidateList.length === 0) {
+                const opt = document.createElement('option');
+                opt.textContent = '-- 対象WSが見つかりません --';
+                select.appendChild(opt);
+                return;
+            }
+
+            candidateList.forEach(ws => {
+                const opt = document.createElement('option');
+                opt.value = ws;
+                opt.textContent = ws;
+                select.appendChild(opt);
+            });
+        }
+
+        function onJobChange() {
+            const job = document.getElementById('jobSelect').value;
+            if (!configData.profiles[job]) {
+                configData.profiles[job] = { "weapon": "片手剣", "ws_priority": [] };
+            }
+            document.getElementById('weaponSelect').value = configData.profiles[job].weapon || "片手剣";
+            populateAddWsSelect();
+            renderPriorityList();
+        }
+
+        function onWeaponChange() {
+            const job = document.getElementById('jobSelect').value;
+            const weapon = document.getElementById('weaponSelect').value;
+            configData.profiles[job].weapon = weapon;
+            populateAddWsSelect();
+        }
+
+        function onGlobalConfigChange() {
+            configData.min_tp = parseInt(document.getElementById('minTpInput').value) || 1000;
+        }
+
+        function exportJSON() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(configData, null, 4));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", "omnichain_config.json");
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
+
+        function importJSON(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const imported = JSON.parse(e.target.result);
+                    if (imported.profiles) {
+                        configData = imported;
+                        if (imported.min_tp) {
+                            document.getElementById('minTpInput').value = imported.min_tp;
+                        }
+                        onJobChange();
+                        alert('omnichain_config.json の読み込みに成功しました！');
+                    } else {
+                        alert('有効な omnichain_config.json ファイルではありません。');
+                    }
+                } catch(err) {
+                    alert('JSONファイルの読み込みエラーが発生しました: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // 初期化実行
+        onJobChange();
+    </script>
+</body>
+</html>
