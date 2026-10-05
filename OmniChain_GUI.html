@@ -197,17 +197,20 @@
         .search-box {
             margin-bottom: 8px;
         }
+        .multi-select-ws {
+            height: 180px !important;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>⚔️ OmniChain v7.0 - Web Config Editor</h1>
-            <p style="color: var(--sub); margin:0; font-size:14px;">全22ジョブ ＆ 全14武器種 ＋ プライムWS ＋ PUPマトン ＋ SMN履行 (全230種公式表記) 対応設定ツール</p>
+            <p style="color: var(--sub); margin:0; font-size:14px;">全22ジョブ ＆ 全14武器種 (214種類以上) 対応 WS優先順位設定・管理ツール</p>
         </header>
         
         <div class="grid">
-            <!-- 1. ジョブ＆基本設定 -->
             <div class="card">
                 <h2>1. 対象ジョブ ＆ 装備武器種の設定</h2>
                 
@@ -217,7 +220,6 @@
                         <option value="WAR">戦士 (WAR)</option>
                         <option value="PLD">ナイト (PLD)</option>
                         <option value="SAM">侍 (SAM)</option>
-                        <option value="NIN">忍者 (NIN)</option>
                         <option value="THF">シーフ (THF)</option>
                         <option value="DRK">暗黒騎士 (DRK)</option>
                         <option value="DRG">竜騎士 (DRG)</option>
@@ -228,14 +230,15 @@
                         <option value="DNC">踊り子 (DNC)</option>
                         <option value="RUN">魔導剣士 (RUN)</option>
                         <option value="RNG">狩人 (RNG)</option>
+                        <option value="NIN">忍者 (NIN)</option>
                         <option value="BST">獣使い (BST)</option>
                         <option value="BRD">吟遊詩人 (BRD)</option>
                         <option value="PUP">からくり士 (PUP)</option>
-                        <option value="SMN">召喚士 (SMN)</option>
                         <option value="SCH">学者 (SCH)</option>
                         <option value="GEO">風水士 (GEO)</option>
                         <option value="WHM">白魔道士 (WHM)</option>
                         <option value="BLM">黒魔道士 (BLM)</option>
+                        <option value="SMN">召喚士 (SMN)</option>
                     </select>
                 </div>
                 
@@ -265,7 +268,6 @@
                 </div>
             </div>
             
-            <!-- 2. WS優先順位設定 -->
             <div class="card">
                 <h2>2. WS優先順位 (Priority) リスト編集</h2>
                 
@@ -273,14 +275,13 @@
                     <!-- 動的描写 -->
                 </div>
                 
-                <!-- WS追加コントロール -->
                 <div class="add-box">
-                    <label style="color:#a5b4fc; margin-bottom:8px;">＋ WS/履行の追加 (全230種 完全公式表記):</label>
+                    <label style="color:#a5b4fc; margin-bottom:8px;">＋ WSの追加 (一覧スクロール表示):</label>
                     
                     <div class="form-group" style="margin-bottom:8px;">
                         <select id="categoryFilter" onchange="populateAddWsSelect()">
                             <option value="CURRENT">選択中の武器種のみ</option>
-                            <option value="ALL">★全武器種・ペット履行 (全230種)</option>
+                            <option value="ALL">★全武器種・全技表示 (214種類)</option>
                             <option value="格闘">格闘 WS</option>
                             <option value="短剣">短剣 WS</option>
                             <option value="片手剣">片手剣 WS</option>
@@ -296,23 +297,23 @@
                             <option value="弓術">弓術 WS</option>
                             <option value="射撃">射撃 WS</option>
                             <option value="PUP オートマトン WS">🤖 PUP オートマトン WS</option>
-                            <option value="SMN 契約の履行">🔮 SMN 契約の履行</option>
+                            <option value="SMN 契約の履行">🔮 SMN 契約の履行 (召喚獣)</option>
                         </select>
                     </div>
 
                     <div class="search-box">
-                        <input type="text" id="wsSearchInput" placeholder="🔍 絞り込み検索 (例: 秘, 不動, マルカラ...)" oninput="populateAddWsSelect()">
+                        <input type="text" id="wsSearchInput" placeholder="🔍 絞り込み検索 (例: サベ, 不動, ルドラ...)" oninput="populateAddWsSelect()">
                     </div>
                     
-                    <div style="display:flex; gap:8px;">
-                        <select id="addWsSelect" style="flex:1;">
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <select id="addWsSelect" class="multi-select-ws" size="8">
                             <!-- 動的生成 -->
                         </select>
-                        <button class="btn btn-primary" onclick="addSelectedWS()">リストに追加</button>
+                        <button class="btn btn-primary" onclick="addSelectedWS()">選択したWSを優先順位リストに追加</button>
                     </div>
 
                     <div style="margin-top:10px; border-top:1px dashed #374151; padding-top:8px;">
-                        <label style="font-size:12px; color:#9ca3af;">自由入力 (カスタムWS名):</label>
+                        <label style="font-size:12px; color:#9ca3af;">自由入力 (リストにないカスタムWS名):</label>
                         <div style="display:flex; gap:8px; margin-top:4px;">
                             <input type="text" id="customWsInput" placeholder="WS名を直接入力">
                             <button class="btn btn-action" onclick="addCustomWS()">直接追加</button>
@@ -333,9 +334,297 @@
     </div>
 
     <script>
-        const wsDict = {"格闘": ["コンボ", "タックル", "短勁", "バックハンドブロー", "乱撃", "スピンアタック", "空鳴拳", "双竜脚", "夢想阿修羅拳", "闘魂旋風脚", "ファイナルヘヴン", "アスケーテンツォルン", "連環六合圏", "ビクトリースマイト", "四神円舞", "マルカラ"], "短剣": ["ワスプスティング", "バイパーバイト", "シャドーステッチ", "ガストスラッシュ", "サイクロン", "エナジースティール", "エナジードレイン", "ダンシングエッジ", "シャークバイト", "エヴィサレーション", "マーシーストローク", "マンダリクスタッブ", "モーダントライム", "ピリッククレオス", "ルドラストーム", "イオリアンエッジ", "エクゼンテレター", "ルースレスストローク"], "片手剣": ["ファストブレード", "バーニングブレード", "レッドロータス", "フラットブレード", "シャインブレード", "セラフブレード", "サークルブレード", "スピリッツウィズイン", "ボーパルブレード", "スウィフトブレード", "サベッジブレード", "サンギンブレード", "ナイツオブラウンド", "ロイエ", "エクスピアシオン", "ロズレーファタール", "シャンデュシニュ", "レクイエスカット", "インペラトル"], "両手剣": ["ハードスラッシュ", "パワースラッシュ", "フロストバイト", "フリーズバイト", "ショックウェーブ", "スピンスラッシュ", "グラウンドストライク", "スカージ", "トアクリーバー", "レゾルーション", "デミディエーション", "フィンブルヴェト"], "片手斧": ["アバランチアクス", "ランページ", "カラミティ", "ミストラルアクス", "デシメーション", "オンスロート", "プライマルレンド", "ルイネーター", "クラウドスプリッタ", "ブリッツ"], "両手斧": ["シールドブレイク", "アイアンテンペスト", "フルブレイク", "レイジングラッシュ", "スチールサイクロン", "メタトロントーメント", "キングズジャスティス", "ウッコフューリー", "アップヒーバル", "フェルクリーヴ", "ディザスター"], "両手鎌": ["スライス", "ダークハーベスト", "ナイトメア", "ギロティン", "クロスリーパー", "スパイラルヘル", "カタストロフィ", "インサージェンシー", "インファナルサイズ", "クワイタス", "エントロピー", "ジ・オリジン"], "両手槍": ["ダブルスラスト", "サンダースラスト", "ライデンスラスト", "足払い", "ペンタスラスト", "ボーパルスラスト", "スキュアー", "大車輪", "インパルスドライヴ", "ゲイルスコグル", "雲蒸竜変", "ソニックスラスト", "カムラン", "スターダイバー", "ダーマット"], "片手刀": ["臨", "烈", "滴", "凍", "地", "影", "迅", "天", "空", "生者必滅", "カムハブリ", "秘", "瞬", "是生滅法"], "両手刀": ["壱之太刀・燕飛", "弐之太刀・鋒縛", "参之太刀・轟天", "四之太刀・陽炎", "五之太刀・陣風", "六之太刀・光輝", "七之太刀・雪風", "八之太刀・月光", "九之太刀・花車", "零之太刀・回天", "十之太刀・乱鴉", "十一之太刀・鳳蝶", "十二之太刀・照破", "祖之太刀・不動", "絶之太刀・無名"], "片手棍": ["シャインストライク", "セラフストライク", "ブレインクラッシュ", "ジャッジメント", "ヘキサストライク", "ブラックヘイロー", "ランドグリース", "レルムレイザー", "エクズデーション", "フラッシュノヴァ", "ダグダ"], "両手棍": ["ヘヴィスイング", "ロッククラッシャー", "アースクラッシャー", "スターバースト", "サンバースト", "レトリビューション", "ヴィゾフニル", "ガーランドオブブリス", "オムニシエンス", "カタクリスム", "ミルキル", "シャッターソウル", "オシャラ"], "弓術": ["フレイミングアロー", "ピアシングアロー", "ダリングアロー", "ブラストアロー", "アーチングアロー", "エンピリアルアロー", "南無八幡", "リフルジェントアロー", "ジシュヌの光輝", "エイペクスアロー", "シャルヴ"], "射撃": ["ホットショット", "スプリットショット", "スナイパーショット", "スラッグショット", "デトネーター", "カラナック", "トゥルーフライト", "レデンサリュート", "ワイルドファイア", "ラストスタンド", "ジ・エンド"], "PUP オートマトン WS": ["ストリングシュレッダー", "スラップスティック", "ノックアウト", "マジックモーター", "キメラリパー", "ストリングクリッパー", "カニバルブレード", "ボーンクラッシャー", "アルクバリスタ", "デイズ", "アーマーピアッサー", "アーマーシャッタラー"], "SMN 契約の履行": ["ポイズンネイル", "ロックスロー", "ロックバスター", "メガリススロー", "マウンテンバスター", "クラッグスロー", "バラクーダダイブ", "テールウィップ", "スピニングダイブ", "クロー", "プレデタークロー", "パンチ", "バーニングストライク", "フレイムクラッシュ", "アクスキック", "ダブルスラップ", "ラッシュ", "ショックストライク", "カオスストライク", "ボルトストライク", "ムーンリットチャージ", "クレセントファング", "エクリプスバイト", "カミサドー", "ブラインドサイド", "リーガルスクラッチ", "リーガルガッシュ", "ウェルト", "ラウンドハウス", "ヒステリックアサルト"]};
+        const wsDict = {
+            "格闘": [
+                "コンボ", "タックル", "短勁", "バックハンドブロー", "乱撃", "スピンアタック",
+                "空鳴拳", "双竜脚", "夢想阿修羅拳", "闘魂旋風脚", "ファイナルヘヴン",
+                "アスケーテンツォルン", "連環六合圏", "ビクトリースマイト", "四神円舞", "マルカラ"
+            ],
+            "短剣": [
+                "ワスプスティング", "バイパーバイト", "シャドーステッチ", "ガストスラッシュ", "サイクロン",
+                "エナジースティール", "エナジードレイン", "ダンシングエッジ", "シャークバイト", "エヴィサレーション",
+                "マーシーストローク", "マンダリクスタッブ", "モーダントライム", "ピリッククレオス", "ルドラストーム",
+                "イオリアンエッジ", "エクゼンテレター", "ルースレスストローク"
+            ],
+            "片手剣": [
+                "ファストブレード", "バーニングブレード", "レッドロータス", "フラットブレード", "シャインブレード",
+                "セラフブレード", "サークルブレード", "スピリッツウィズイン", "ボーパルブレード", "スウィフトブレード",
+                "サベッジブレード", "サンギンブレード", "ナイツオブラウンド", "ロイエ", "エクスピアシオン",
+                "ロズレーファタール", "シャンデュシニュ", "レクイエスカット", "インペラトル"
+            ],
+            "両手剣": [
+                "ハードスラッシュ", "パワースラッシュ", "フロストバイト", "フリーズバイト", "ショックウェーブ",
+                "スピンスラッシュ", "グラウンドストライク", "スカージ", "トアクリーバー", "レゾルーション",
+                "デミディエーション", "フィンブルヴェト"
+            ],
+            "片手斧": [
+                "アバランチアクス", "ランページ", "カラミティ", "ミストラルアクス", "デシメーション",
+                "オンスロート", "プライマルレンド", "ルイネーター", "クラウドスプリッタ", "ブリッツ"
+            ],
+            "両手斧": [
+                "シールドブレイク", "アイアンテンペスト", "フルブレイク", "レイジングラッシュ", "スチールサイクロン",
+                "メタトロントーメント", "キングズジャスティス", "ウッコフューリー", "アップヒーバル", "フェルクリーヴ", "ディザスター"
+            ],
+            "両手鎌": [
+                "スライス", "ダークハーベスト", "ナイトメア", "ギロティン", "クロスリーパー",
+                "スパイラルヘル", "カタストロフィ", "インサージェンシー", "インファナルサイズ", "クワイタス", "エントロピー", "ジ・オリジン"
+            ],
+            "両手槍": [
+                "ダブルスラスト", "サンダースラスト", "ライデンスラスト", "足払い", "ペンタスラスト",
+                "ボーパルスラスト", "スキュアー", "大車輪", "インパルスドライヴ", "ゲイルスコグル",
+                "雲蒸竜変", "ソニックスラスト", "カムラン", "スターダイバー", "ダーマット"
+            ],
+            "片手刀": [
+                "臨", "烈", "滴", "凍", "地", "影", "迅", "天", "空", "生者必滅", "カムハブリ", "秘", "瞬", "是生滅法"
+            ],
+            "両手刀": [
+                "壱之太刀・燕飛", "弐之太刀・鋒縛", "参之太刀・轟天", "四之太刀・陽炎", "五之太刀・陣風",
+                "六之太刀・光輝", "七之太刀・雪風", "八之太刀・月光", "九之太刀・花車", "零之太刀・回天",
+                "十之太刀・乱鴉", "十一之太刀・鳳蝶", "十二之太刀・照破", "祖之太刀・不動", "絶之太刀・無名"
+            ],
+            "片手棍": [
+                "シャインストライク", "セラフストライク", "ブレインクラッシュ", "ジャッジメント", "ヘキサストライク",
+                "ブラックヘイロー", "ランドグリース", "レルムレイザー", "エクズデーション", "フラッシュノヴァ", "ダグダ"
+            ],
+            "両手棍": [
+                "ヘヴィスイング", "ロッククラッシャー", "アースクラッシャー", "スターバースト", "サンバースト",
+                "レトリビューション", "ヴィゾフニル", "ガーランドオブブリス", "オムニシエンス", "カタクリスム",
+                "ミルキル", "シャッターソウル", "オシャラ"
+            ],
+            "弓術": [
+                "フレイミングアロー", "ピアシングアロー", "ダリングアロー", "ブラストアロー", "アーチングアロー",
+                "エンピリアルアロー", "南無八幡", "リフルジェントアロー", "ジシュヌの光輝", "エイペクスアロー", "シャルヴ"
+            ],
+            "射撃": [
+                "ホットショット", "スプリットショット", "スナイパーショット", "スラッグショット", "デトネーター",
+                "カラナック", "トゥルーフライト", "レデンサリュート", "ワイルドファイア", "ラストスタンド", "ジ・エンド"
+            ],
+            "PUP オートマトン WS": [
+                "ストリングシュレッダー", "ボーンクラッシャー", "カニバルブレード", "キメラリパー",
+                "ストリングクリッパー", "マジックモーター", "スラップスティック", "ノックアウト",
+                "アーマーシャッタラー", "アーマーピアッサー", "デイズ", "アルクバリスタ"
+            ],
+            "SMN 契約の履行": [
+                "ポイズンネイル", "ロックスロー", "ロックバスター", "メガリススロー", "マウンテンバスター",
+                "クラッグスロー", "バラクーダダイブ", "テールウィップ", "スピニングダイブ", "クロー",
+                "プレデタークロー", "パンチ", "バーニングストライク", "フレイムクラッシュ", "アクスキック",
+                "ダブルスラップ", "ラッシュ", "ショックストライク", "カオスストライク", "ボルトストライク",
+                "ムーンリットチャージ", "クレセントファング", "エクリプスバイト", "カミサドー", "ブラインドサイド",
+                "リーガルスクラッチ", "リーガルガッシュ", "ウェルト", "ラウンドハウス", "ヒステリックアサルト"
+            ]
+        };
 
-        let configData = {"enabled": true, "min_tp": 1000, "party_sync": true, "auto_mode": "flexible", "wait_delay": 1.2, "profiles": {"WAR": {"weapon": "両手斧", "ws_priority": ["フェルクリーヴ", "アップヒーバル", "ウッコフューリー", "ディザスター"]}, "PLD": {"weapon": "片手剣", "ws_priority": ["サベッジブレード", "インペラトル", "シャンデュシニュ", "ロイエ"]}, "SAM": {"weapon": "両手刀", "ws_priority": ["祖之太刀・不動", "十二之太刀・照破", "絶之太刀・無名", "九之太刀・花車"]}, "NIN": {"weapon": "片手刀", "ws_priority": ["瞬", "秘", "是生滅法", "迅"]}, "THF": {"weapon": "短剣", "ws_priority": ["ルドラストーム", "ルースレスストローク", "エヴィサレーション"]}, "DRK": {"weapon": "両手鎌", "ws_priority": ["クロスリーパー", "トアクリーバー", "ジ・オリジン", "エントロピー"]}, "DRG": {"weapon": "両手槍", "ws_priority": ["インパルスドライヴ", "ダーマット", "カムラン", "スターダイバー"]}, "MNK": {"weapon": "格闘", "ws_priority": ["ビクトリースマイト", "マルカラ", "四神円舞", "夢想阿修羅拳"]}, "RNG": {"weapon": "弓術", "ws_priority": ["ジシュヌの光輝", "シャルヴ", "エイペクスアロー", "南無八幡"]}, "COR": {"weapon": "射撃", "ws_priority": ["レデンサリュート", "ラストスタンド", "ジ・エンド", "ワイルドファイア"]}, "PUP": {"weapon": "格闘", "ws_priority": ["ビクトリースマイト", "ストリングシュレッダー", "ボーンクラッシャー", "アーマーシャッタラー"]}, "SMN": {"weapon": "両手棍", "ws_priority": ["ガーランドオブブリス", "オシャラ", "ボルトストライク", "フレイムクラッシュ"]}}};
+        let configData = {
+            "enabled": true,
+            "min_tp": 1000,
+            "party_sync": true,
+            "auto_mode": "flexible",
+            "wait_delay": 1.2,
+            "profiles": {
+                        "WAR": {
+                                    "weapon": "両手斧",
+                                    "ws_priority": [
+                                                "ディザスター",
+                                                "アップヒーバル",
+                                                "ウッコフューリー",
+                                                "キングズジャスティス",
+                                                "フェルクリーヴ"
+                                    ]
+                        },
+                        "PLD": {
+                                    "weapon": "片手剣",
+                                    "ws_priority": [
+                                                "インペラトル",
+                                                "サベッジブレード",
+                                                "シャンデュシニュ",
+                                                "ボーパルブレード",
+                                                "ロイエ"
+                                    ]
+                        },
+                        "SAM": {
+                                    "weapon": "両手刀",
+                                    "ws_priority": [
+                                                "絶之太刀・無名",
+                                                "祖之太刀・不動",
+                                                "十二之太刀・照破",
+                                                "九之太刀・花車"
+                                    ]
+                        },
+                        "THF": {
+                                    "weapon": "短剣",
+                                    "ws_priority": [
+                                                "ルースレスストローク",
+                                                "ルドラストーム",
+                                                "エヴィサレーション",
+                                                "イオリアンエッジ"
+                                    ]
+                        },
+                        "DRK": {
+                                    "weapon": "両手鎌",
+                                    "ws_priority": [
+                                                "ジ・オリジン",
+                                                "クロスリーパー",
+                                                "エントロピー",
+                                                "カタストロフィ"
+                                    ]
+                        },
+                        "RNG": {
+                                    "weapon": "弓術",
+                                    "ws_priority": [
+                                                "シャルヴ",
+                                                "ジシュヌの光輝",
+                                                "エイペクスアロー",
+                                                "南無八幡"
+                                    ]
+                        },
+                        "NIN": {
+                                    "weapon": "片手刀",
+                                    "ws_priority": [
+                                                "是生滅法",
+                                                "瞬",
+                                                "秘",
+                                                "迅"
+                                    ]
+                        },
+                        "DRG": {
+                                    "weapon": "両手槍",
+                                    "ws_priority": [
+                                                "ダーマット",
+                                                "インパルスドライヴ",
+                                                "カムラン",
+                                                "スターダイバー"
+                                    ]
+                        },
+                        "MNK": {
+                                    "weapon": "格闘",
+                                    "ws_priority": [
+                                                "マルカラ",
+                                                "ビクトリースマイト",
+                                                "四神円舞",
+                                                "夢想阿修羅拳"
+                                    ]
+                        },
+                        "RDM": {
+                                    "weapon": "片手剣",
+                                    "ws_priority": [
+                                                "インペラトル",
+                                                "サベッジブレード",
+                                                "シャンデュシニュ",
+                                                "ロズレーファタール",
+                                                "サンギンブレード"
+                                    ]
+                        },
+                        "BLU": {
+                                    "weapon": "片手剣",
+                                    "ws_priority": [
+                                                "インペラトル",
+                                                "サベッジブレード",
+                                                "シャンデュシニュ",
+                                                "レクイエスカット"
+                                    ]
+                        },
+                        "COR": {
+                                    "weapon": "射撃",
+                                    "ws_priority": [
+                                                "ジ・エンド",
+                                                "レデンサリュート",
+                                                "ラストスタンド",
+                                                "ワイルドファイア"
+                                    ]
+                        },
+                        "DNC": {
+                                    "weapon": "短剣",
+                                    "ws_priority": [
+                                                "ルースレスストローク",
+                                                "ピリッククレオス",
+                                                "ルドラストーム",
+                                                "エヴィサレーション"
+                                    ]
+                        },
+                        "RUN": {
+                                    "weapon": "両手剣",
+                                    "ws_priority": [
+                                                "フィンブルヴェト",
+                                                "デミディエーション",
+                                                "トアクリーバー",
+                                                "レゾルーション"
+                                    ]
+                        },
+                        "BST": {
+                                    "weapon": "片手斧",
+                                    "ws_priority": [
+                                                "ブリッツ",
+                                                "ルイネーター",
+                                                "デシメーション",
+                                                "クラウドスプリッタ"
+                                    ]
+                        },
+                        "BRD": {
+                                    "weapon": "短剣",
+                                    "ws_priority": [
+                                                "ルースレスストローク",
+                                                "ルドラストーム",
+                                                "モーダントライム",
+                                                "イオリアンエッジ"
+                                    ]
+                        },
+                        "PUP": {
+                                    "weapon": "格闘",
+                                    "ws_priority": [
+                                                "マルカラ",
+                                                "ビクトリースマイト",
+                                                "ストリングシュレッダー",
+                                                "ボーンクラッシャー",
+                                                "アーマーシャッタラー"
+                                    ]
+                        },
+                        "SCH": {
+                                    "weapon": "両手棍",
+                                    "ws_priority": [
+                                                "オシャラ",
+                                                "ガーランドオブブリス",
+                                                "ミルキル",
+                                                "カタクリスム"
+                                    ]
+                        },
+                        "GEO": {
+                                    "weapon": "片手棍",
+                                    "ws_priority": [
+                                                "ダグダ",
+                                                "ブラックヘイロー",
+                                                "レルムレイザー",
+                                                "フラッシュノヴァ"
+                                    ]
+                        },
+                        "WHM": {
+                                    "weapon": "片手棍",
+                                    "ws_priority": [
+                                                "ダグダ",
+                                                "ヘキサストライク",
+                                                "ブラックヘイロー",
+                                                "レルムレイザー"
+                                    ]
+                        },
+                        "BLM": {
+                                    "weapon": "両手棍",
+                                    "ws_priority": [
+                                                "オシャラ",
+                                                "ヴィゾフニル",
+                                                "ミルキル",
+                                                "カタクリスム"
+                                    ]
+                        },
+                        "SMN": {
+                                    "weapon": "両手棍",
+                                    "ws_priority": [
+                                                "ボルトストライク",
+                                                "フレイムクラッシュ",
+                                                "プレデタークロー",
+                                                "ガーランドオブブリス"
+                                    ]
+                        }
+            }
+};
 
         let draggedIdx = null;
 
@@ -372,17 +661,7 @@
                     }
                 };
 
-                item.innerHTML = `
-                    <span class="ws-badge">優先度 ${idx + 1}</span>
-                    <span class="ws-title">${ws}</span>
-                    <div class="btn-group">
-                        <button class="btn btn-sm btn-action" title="最優先へ" onclick="moveWS(${idx}, 'top')">🔝</button>
-                        <button class="btn btn-sm btn-action" title="1つ上へ" onclick="moveWS(${idx}, -1)">▲</button>
-                        <button class="btn btn-sm btn-action" title="1つ下へ" onclick="moveWS(${idx}, 1)">▼</button>
-                        <button class="btn btn-sm btn-action" title="最下位へ" onclick="moveWS(${idx}, 'bottom')">🔻</button>
-                        <button class="btn btn-sm btn-danger" title="削除" onclick="removeWS(${idx})">削除</button>
-                    </div>
-                `;
+                item.innerHTML = `<span class="ws-badge">優先度 ${idx + 1}</span><span class="ws-title">${ws}</span><div class="btn-group"><button class="btn btn-sm btn-action" title="最優先へ" onclick="moveWS(${idx}, 'top')">🔝</button><button class="btn btn-sm btn-action" title="1つ上へ" onclick="moveWS(${idx}, -1)">▲</button><button class="btn btn-sm btn-action" title="1つ下へ" onclick="moveWS(${idx}, 1)">▼</button><button class="btn btn-sm btn-action" title="最下位へ" onclick="moveWS(${idx}, 'bottom')">🔻</button><button class="btn btn-sm btn-danger" title="削除" onclick="removeWS(${idx})">削除</button></div>`;
                 listDiv.appendChild(item);
             });
         }
@@ -416,15 +695,24 @@
 
         function addSelectedWS() {
             const job = document.getElementById('jobSelect').value;
-            const ws = document.getElementById('addWsSelect').value;
-            if (ws) {
-                if (!configData.profiles[job].ws_priority) {
-                    configData.profiles[job].ws_priority = [];
-                }
-                if (!configData.profiles[job].ws_priority.includes(ws)) {
+            const select = document.getElementById('addWsSelect');
+            const selectedOptions = Array.from(select.selectedOptions);
+            
+            if (!configData.profiles[job].ws_priority) {
+                configData.profiles[job].ws_priority = [];
+            }
+
+            let added = false;
+            selectedOptions.forEach(opt => {
+                const ws = opt.value;
+                if (ws && !configData.profiles[job].ws_priority.includes(ws)) {
                     configData.profiles[job].ws_priority.push(ws);
-                    renderPriorityList();
+                    added = true;
                 }
+            });
+
+            if (added) {
+                renderPriorityList();
             }
         }
 
@@ -454,7 +742,14 @@
             let candidateList = [];
 
             if (filterCategory === 'CURRENT') {
-                candidateList = wsDict[currentWeapon] || [];
+                candidateList = wsDict[currentWeapon] ? [...wsDict[currentWeapon]] : [];
+                const job = document.getElementById('jobSelect').value;
+                if (job === 'PUP' && wsDict['PUP オートマトン WS']) {
+                    candidateList = [...candidateList, ...wsDict['PUP オートマトン WS']];
+                }
+                if (job === 'SMN' && wsDict['SMN 契約の履行']) {
+                    candidateList = [...candidateList, ...wsDict['SMN 契約の履行']];
+                }
             } else if (filterCategory === 'ALL') {
                 let set = new Set();
                 Object.values(wsDict).forEach(arr => arr.forEach(w => set.add(w)));
@@ -537,8 +832,9 @@
             reader.readAsText(file);
         }
 
-        // 初期化実行
-        onJobChange();
+        document.addEventListener('DOMContentLoaded', () => {
+            onJobChange();
+        });
     </script>
 </body>
 </html>
