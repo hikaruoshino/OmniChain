@@ -51,6 +51,26 @@ sc_dict.SC_COMBO_MAP = {
     ["闇"]   = { ["闇"] = "闇" }
 }
 
+-- イオニック武器のWS: その武器を装備して撃つとアフターマスが付き、Lv3 属性 (光/闇) が加わる
+-- (アフターマスを発動させたWS自身にも付く。キーは res の英語WS名、slot 省略時はメイン武器)
+-- 出典: BG-Wiki「REMA Cheat Sheet」「Aeonic Weapon Skill」
+sc_dict.AEONIC_WS = {
+    ["Shijin Spiral"] = { prop = "光", weapon = "Godhands" },
+    ["Exenterator"]   = { prop = "光", weapon = "Aeneas" },
+    ["Requiescat"]    = { prop = "闇", weapon = "Sequence" },
+    ["Resolution"]    = { prop = "光", weapon = "Lionheart" },
+    ["Ruinator"]      = { prop = "闇", weapon = "Tri-edge" },
+    ["Upheaval"]      = { prop = "光", weapon = "Chango" },
+    ["Entropy"]       = { prop = "闇", weapon = "Anguta" },
+    ["Stardiver"]     = { prop = "闇", weapon = "Trishula" },
+    ["Blade: Shun"]   = { prop = "光", weapon = "Heishi Shorinken" },
+    ["Tachi: Shoha"]  = { prop = "光", weapon = "Dojikiri Yasutsuna" },
+    ["Realmrazer"]    = { prop = "光", weapon = "Tishtrya" },
+    ["Shattersoul"]   = { prop = "闇", weapon = "Khatvanga" },
+    ["Apex Arrow"]    = { prop = "光", weapon = "Fail-Not", slot = "range" },
+    ["Last Stand"]    = { prop = "光", weapon = "Fomalhaut", slot = "range" },
+}
+
 -- 連携した結果これ以上連携を続けられないか (光→光 / 闇→闇 の後、および極光/黒闇)
 function sc_dict.is_terminal_chain(prev_sc, result_sc)
     if result_sc == "極光" or result_sc == "黒闇" then return true end
