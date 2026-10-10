@@ -1,10 +1,10 @@
 -- =============================================================================
--- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.2.0 - 手動始点モード搭載)
+-- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.3.0 - フェイスの一人連携待ち)
 -- =============================================================================
 
 _addon.name     = "OmniChain"
 _addon.author   = "hikaruoshino"
-_addon.version  = "7.2.0"
+_addon.version  = "7.3.0"
 _addon.commands = {"omni", "omnichain"}
 
 require("luau")
@@ -48,21 +48,17 @@ local defaults = {}
 defaults.enabled = true
 defaults.show_hud = false -- 初期起動時はHUD非表示
 defaults.debug_logging = true -- 個人用デバッグログ記録有効
--- リアルタイム監視 (//omni mon)
-defaults.monitor = {
-    show = false,        -- 監視オーバーレイ表示
-    packets = false,     -- パーティーの技パケットを詳細に記録 (0x028 / 0x029)
-    chat_errors = true,  -- エラー・警告をその場でチャットに表示
-    console = true,      -- Windower の console.log に出た他アドオンのエラーも監視
-    lines = 10,          -- オーバーレイに出す件数
-    pos = {x = 20, y = 260},
-}
 defaults.min_tp = 1000
 defaults.party_sync = true
 defaults.auto_mode = "flexible" -- "flexible", "strict", "lead_only"
 defaults.wait_delay = 1.2
 defaults.start_mode = "auto"  -- "auto": 1回目も自動 / "manual": 1回目は自分 (誰かの始点に続けて自動連携)
 defaults.follow_wait = 6.0    -- manual: 直前のWSが当たってから自動WSを撃つまでの秒数 (他人の横槍を待つ)
+defaults.min_follow = 3.3     -- 直前のWS (誰のものでも) が当たってから、次の自動WSを撃つまでの最短秒数 (連携の受付が開くのを待つ)
+-- フェイスの一人連携待ち (イロハ・ノユリ・ギルガメッシュ・アークGK。テンゼンは待たない)
+defaults.trust_solo = true        -- 一人連携を狙うフェイスが条件のアビリティを使ったら、終わるまで自動WSを撃たない
+defaults.solo_start_wait = 12.0   -- アビリティを使ってから最初のWSが出るまで待つ秒数 (出なければ待つのをやめる)
+defaults.solo_gap = 11.0          -- フェイスのWSから次のWSまで待つ秒数 (これを過ぎたら一人連携は終わりとみなす。実測: イロハは約 10 秒間隔)
 defaults.pos = {x = 500, y = 350}
 defaults.text = {font = "Meiryo", size = 11, alpha = 255}
 defaults.bg = {alpha = 180, red = 10, green = 10, blue = 15}
@@ -97,8 +93,6 @@ local profiles = {
 }
 
 local settings = config.load(defaults)
-if type(settings.monitor) ~= "table" then settings.monitor = {} end
-local mon_cfg = settings.monitor
 
 -- カラーコード装飾 (DirectWrite UTF-8)
 local function color_text(str, r, g, b)
@@ -106,11 +100,11 @@ local function color_text(str, r, g, b)
 end
 
 -- -----------------------------------------------------------------------------
--- リアルタイム監視＆ログ記録 (omnichain_debug.log)
+-- ログ記録 (omnichain_debug.log)
 --   ・ログはメモリに溜めて数秒ごとにまとめて書く (毎回の open/close を避ける)
 --   ・1MB を超えたら omnichain_debug.old.log に退避する
 --   ・ERROR / WARN はその場でチャットに出す (同じ内容は10秒間まとめる)
---   ・直近の出来事はメモリにも残し、監視オーバーレイと //omni log tail で見られる
+--   ・直近の出来事はメモリにも残し、//omni log tail で見られる
 -- -----------------------------------------------------------------------------
 local log_file_path = windower.addon_path .. "omnichain_debug.log"
 local old_log_path  = windower.addon_path .. "omnichain_debug.old.log"
@@ -122,18 +116,10 @@ local monitor = {
     buffer = {},          -- ファイルへ未書き込みの行
     last_flush = 0,
     recent = {},          -- 直近の出来事 {time, level, cat, msg}
-    counts = {ERROR = 0, WARN = 0, INFO = 0, PKT = 0},
+    counts = {ERROR = 0, WARN = 0, INFO = 0},
     throttle = {},        -- チャット表示の間引き: key -> {time, suppressed}
-    dirty = true,         -- オーバーレイの再描画が必要か
-    hud = nil,
 }
 
-local LEVEL_COLORS = {
-    ERROR = {255, 90, 90},
-    WARN  = {255, 200, 80},
-    INFO  = {200, 200, 200},
-    PKT   = {120, 200, 255},
-}
 local LEVEL_CHAT_COLORS = {ERROR = 167, WARN = 159}
 
 local function flush_log(force)
@@ -197,14 +183,11 @@ local function log_event(level, category, message)
     local recent = monitor.recent
     recent[#recent + 1] = {time = os.date("%H:%M:%S"), level = level, cat = category, msg = message}
     if #recent > RECENT_MAX then table.remove(recent, 1) end
-    monitor.dirty = true
 
     if is_alert then
         -- 失敗原因を失わないよう、エラー系はすぐ書き出す
         flush_log(true)
-        if mon_cfg.chat_errors ~= false then
-            chat_msg(string.format("[OmniChain:%s] %s: %s", level, category, utf8_trim(message, 120)), LEVEL_CHAT_COLORS[level])
-        end
+        chat_msg(string.format("[OmniChain:%s] %s: %s", level, category, utf8_trim(message, 120)), LEVEL_CHAT_COLORS[level])
     elseif #monitor.buffer >= 50 then
         flush_log(true)
     end
@@ -233,47 +216,6 @@ local function guarded(name, fn)
     end
 end
 
-local function monitor_hud_create()
-    if monitor.hud then return end
-    local pos = type(mon_cfg.pos) == "table" and mon_cfg.pos or {}
-    monitor.hud = texts.new("", {
-        pos = {x = safe_num(pos.x, 20), y = safe_num(pos.y, 260)},
-        text = {font = "Meiryo", size = 9, alpha = 255},
-        bg = {alpha = 170, red = 0, green = 0, blue = 0},
-        padding = 4,
-        flags = {draggable = true},
-    })
-    monitor.dirty = true
-end
-
-local function monitor_hud_render()
-    if not mon_cfg.show then
-        if monitor.hud then monitor.hud:hide() end
-        return
-    end
-    monitor_hud_create()
-    if not monitor.dirty then return end
-    monitor.dirty = false
-
-    local c = monitor.counts
-    local lines = {}
-    lines[1] = string.format("== OmniChain Monitor ==  %s  %s  ERR:%s WARN:%s",
-        mon_cfg.packets and color_text("PKT:ON", 120, 200, 255) or color_text("PKT:OFF", 140, 140, 140),
-        settings.debug_logging and color_text("LOG:ON", 100, 255, 100) or color_text("LOG:OFF", 140, 140, 140),
-        color_text(tostring(c.ERROR or 0), 255, 90, 90),
-        color_text(tostring(c.WARN or 0), 255, 200, 80))
-
-    local max_lines = math.max(1, math.min(30, safe_num(mon_cfg.lines, 10)))
-    local recent = monitor.recent
-    for i = math.max(1, #recent - max_lines + 1), #recent do
-        local e = recent[i]
-        local col = LEVEL_COLORS[e.level] or LEVEL_COLORS.INFO
-        lines[#lines + 1] = color_text(string.format("%s [%s] %s", e.time, e.cat, utf8_trim(e.msg, 60)), col[1], col[2], col[3])
-    end
-    monitor.hud:text(table.concat(lines, string.char(10)))
-    monitor.hud:show()
-end
-
 -- アクションメッセージID → 失敗理由 (res/action_messages.lua には英語しか無いため主要なものを和訳)
 local FAIL_MESSAGES = {
     [4]   = "対象が射程外",
@@ -296,135 +238,6 @@ local FAIL_MESSAGES = {
     [446] = "攻撃できない対象",
 }
 
-local function action_message_text(id)
-    if FAIL_MESSAGES[id] then return FAIL_MESSAGES[id] end
-    local m = res and res.action_messages and res.action_messages[id]
-    return m and m.en or ("message " .. tostring(id))
-end
-
--- -----------------------------------------------------------------------------
--- Windower 本体の console.log 監視 (他アドオンのエラーも拾う)
---   Lua からは更新日時が取れないため、ファイルサイズが増えたら追記分だけ読む
--- -----------------------------------------------------------------------------
-local console_path = (windower.windower_path or (windower.addon_path:match("^(.*[/\\])addons[/\\]") or "")) .. "console.log"
-local CONSOLE_CHECK_SEC = 5
-local CONSOLE_READ_MAX = 64 * 1024
-local console_watch = {offset = nil, last_check = -100}
-
-local CONSOLE_ERROR_PATTERNS = {
-    "Lua runtime error", "Lua syntax error", "Lua error", "has detected an error",
-    "Cannot find", "[Ee]rror:", "stack traceback", "attempt to ",
-}
-
--- エラー文 → 対処のヒント
-local CONSOLE_HINTS = {
-    {"Cannot find the include file %(([^)]+)%)", "インクルード先 %1 が無い: ファイルを置くか include のパスを直す"},
-    {"attempt to compare", "型の違う値を比較している: tonumber 等で数値にそろえる"},
-    {"attempt to index", "nil を参照している: 使う前に nil チェックを入れる"},
-    {"attempt to call", "存在しない関数を呼んでいる: 関数名と読み込み順を確認"},
-    {"attempt to perform arithmetic", "nil/文字列で計算している: 数値化と nil チェック"},
-    {"attempt to concatenate", "nil を文字列連結している: tostring で包む"},
-    {"unfinished string", "構文エラー: 引用符の閉じ忘れ"},
-    {"unexpected symbol", "構文エラー: 記号の誤り"},
-    {"expected", "構文エラー: end や括弧の不足"},
-    {"is not loaded", "読み込んでいないアドオンにコマンドを送った (//lua l で読み込む)"},
-}
-
-local function console_hint(text)
-    for _, h in ipairs(CONSOLE_HINTS) do
-        local cap = text:match(h[1])
-        if cap then return (h[2]:gsub("%%1", (tostring(cap):gsub("%%", "%%%%")))) end
-    end
-    return nil
-end
-
-local function is_console_error(text)
-    for _, pat in ipairs(CONSOLE_ERROR_PATTERNS) do
-        if text:find(pat) then return true end
-    end
-    return false
-end
-
--- console.log は UTF-8 だが、念のため UTF-8 として不正なら Shift-JIS とみなして変換する
-local function console_to_utf8(s)
-    if not s:find("[\128-\255]") then return s end
-    local stripped = s:gsub("[\194-\244][\128-\191]+", "")
-    if not stripped:find("[\128-\255]") then return s end
-    if windower.from_shift_jis then
-        local ok, conv = pcall(windower.from_shift_jis, s)
-        if ok and conv then return conv end
-    end
-    return s
-end
-
--- 読み込んだ行から、同じ時刻に続くエラー行を1件にまとめる
-local function parse_console_errors(chunk)
-    local groups, cur = {}, nil
-    for line in chunk:gmatch("[^\r\n]+") do
-        local ts, body = line:match("^(%d+:%d+:%d+) > ?(.*)$")
-        if not ts then ts, body = nil, line end
-        body = console_to_utf8(body)
-        local is_detail = body:find("^%s") or body:find("^%.%.%.") or body:find("%.lua:%d+:")
-        if is_console_error(body) or (cur and is_detail and (ts == nil or ts == cur.time)) then
-            if cur and (ts == nil or ts == cur.time) then
-                table.insert(cur.parts, (body:gsub("^%s+", "")))
-            else
-                local addon = body:match("^([%w_%-]+)[: ]") or "?"
-                -- "Lua error: ..." / "Error: ..." は Windower 本体のメッセージ
-                if addon == "Lua" or addon == "Error" then addon = "Windower" end
-                cur = {time = ts or "", addon = addon, parts = {body}}
-                table.insert(groups, cur)
-            end
-        else
-            cur = nil
-        end
-    end
-    for _, g in ipairs(groups) do
-        g.text = table.concat(g.parts, " / ")
-        g.hint = console_hint(g.text)
-    end
-    return groups
-end
-
-local function read_console(from, to)
-    local f = io.open(console_path, "rb")
-    if not f then return nil end
-    f:seek("set", from)
-    local data = f:read(to - from) or ""
-    f:close()
-    return data
-end
-
-local function console_size()
-    local f = io.open(console_path, "rb")
-    if not f then return nil end
-    local size = f:seek("end")
-    f:close()
-    return size
-end
-
-local function check_console_log(now)
-    if mon_cfg.console == false then return end
-    if now - console_watch.last_check < CONSOLE_CHECK_SEC then return end
-    console_watch.last_check = now
-    local size = console_size()
-    if not size then return end
-    if console_watch.offset == nil then
-        -- 起動時点までの内容は報告しない (過去分は //omni console で見る)
-        console_watch.offset = size
-        return
-    end
-    if size < console_watch.offset then console_watch.offset = 0 end  -- Windower 再起動で作り直された
-    if size == console_watch.offset then return end
-    local from = math.max(console_watch.offset, size - CONSOLE_READ_MAX)
-    local chunk = read_console(from, size)
-    console_watch.offset = size
-    if not chunk then return end
-    for _, g in ipairs(parse_console_errors(chunk)) do
-        -- チャットは途中で切れるため、対処のヒントを先に置く (原文の全体はログファイルに残る)
-        log_event("WARN", "CONSOLE", string.format("[%s] %s%s", g.addon, g.hint and ("対処: " .. g.hint .. " | ") or "", g.text))
-    end
-end
 
 -- WS優先リストを文字列のみの配列に正規化 (不正な型は空配列)
 -- settings.xml の <1>…<n> は既定値を超える分が文字列キー "5" 等で残るため、数値化して並べ直す
@@ -505,6 +318,8 @@ local state = {
     sc_starter = "",
     sc_target = nil,        -- 連携が付いている敵の ID (別の敵を殴っているときは連携窓として扱わない)
     sc_start_time = 0,      -- 始点・連携のWSが当たった時刻 (manual の待ち時間の起点)
+    sc_step = 0,            -- 今の連携窓までに連携が続いた回数 (始点 = 0)。続くほど受付が短くなる
+    sc_aeonic = false,      -- 今の連携窓の始点が、自分のイオニックWS (アフターマスの光/闇つき) か
     last_chain_name = nil,  -- パケットとチャットで同じ連携を二重に処理しないための記録
     last_chain_time = 0,
     last_packet_sc_time = -100,  -- パケットで連携状態を更新した時刻 (遅れて届くチャットの上書きを防ぐ)
@@ -512,6 +327,9 @@ local state = {
     last_ws_time = 0,
     pending_ws = nil,       -- 自動実行したWSの結果待ち {name, time, tp}
     player_id = nil,
+
+    solos = {},             -- フェイスの一人連携待ち: [フェイスの ID] = {name = 表示名, ability = きっかけ, until_time = 期限, count = WS数}
+                            -- フェイスを何人か呼んでいると同時に複数になる。1 人でも残っていれば自動WSを止める
 }
 
 -- 自動実行したWSの応答が無いまま、この秒数を過ぎたら警告する (WS名の誤り・未習得・入力エラー等)
@@ -567,6 +385,15 @@ local function aeonic_prop(ws_en)
     local a = ws_en and sc_dict.AEONIC_WS[ws_en]
     if not a then return nil end
     return equipped_weapon_names()[a.slot or 'main'] == a.weapon and a.prop or nil
+end
+
+-- 今アフターマスが付いているか (アフターマス:Lv1〜3 = 270〜272、アフターマス = 273)
+local function has_aftermath()
+    local player = windower.ffxi.get_player()
+    for _, buff in pairs(player and player.buffs or {}) do
+        if buff >= 270 and buff <= 273 then return true end
+    end
+    return false
 end
 
 -- 今の武器・ジョブで使えるWSのID集合 (windower.ffxi.get_abilities)
@@ -743,14 +570,48 @@ local function is_executable_ws(ws_name, usable)
 end
 
 -- 連携窓の秒数。manual は他人の横槍を待ってから撃つため、受付の上限 (BG-Wiki: 3〜10秒) まで見る
-local function sc_window_sec()
-    return settings.start_mode == "manual" and 10.0 or 8.0
+-- 連携が続くたびに受付は 1 秒ずつ短くなる (実測 2026-10-10: 3 回連携した後の WS から 7 秒強で撃ったWSは連携しなかった)
+local SC_WINDOW_MIN_SEC = 5.0
+local function sc_window_sec(step)
+    local base = settings.start_mode == "manual" and 10.0 or 8.0
+    -- min_follow を長くしている場合は、その 1 秒後までは受付が続いているものとして扱う (待っている間に見込みが切れて始点に戻るのを防ぐ)
+    return math.max(SC_WINDOW_MIN_SEC, base - safe_num(step, 0), safe_num(settings.min_follow, 3.3) + 1.0)
 end
 
 -- manual: 自動WSを撃てるまでの残り秒数 (直前のWSが当たってから follow_wait 秒)。auto は常に 0
+-- 連携が続いて受付が短くなっているときは、受付が閉じる 2 秒前までに撃てるよう待ち時間を詰める (最短 3 秒)
+-- 連携の受付は、前の技が当たってから約 3 秒後に開く。それより早く撃つと連携せず、前の人の連携も切ってしまう
+-- (実測 2026-10-10: イロハの月輪の 2.9 秒後に撃った花車は連携しなかった。3.0〜3.1 秒後は連携した)。
+-- 連携窓があるあいだは、自動始点モードでも min_follow 秒は待つ
 local function follow_wait_left(now)
-    if settings.start_mode ~= "manual" then return 0 end
-    return math.max(0, safe_num(state.sc_start_time, 0) + safe_num(settings.follow_wait, 6.0) - now)
+    if not (state.sc_active and safe_lt(now, safe_num(state.sc_expiration, 0))) then return 0 end
+    local wait = safe_num(settings.min_follow, 3.3)
+    if settings.start_mode == "manual" then
+        wait = math.max(wait, math.min(safe_num(settings.follow_wait, 6.0), math.max(3.0, sc_window_sec(state.sc_step) - 2.0)))
+    end
+    return math.max(0, safe_num(state.sc_start_time, 0) + wait - now)
+end
+
+-- フェイスの一人連携が終わるまでの残り秒数 (待っていなければ 0)。期限が過ぎていたらここで片付ける
+-- 戻り値: 残り秒数 (いちばん長く待つフェイスの分), そのフェイスの表示名
+local function solo_wait_left(now)
+    if next(state.solos) == nil then return 0 end
+    if settings.trust_solo == false then
+        state.solos = {}
+        return 0
+    end
+    local longest, name = 0, nil
+    for actor_id, solo in pairs(state.solos) do
+        local left = safe_num(solo.until_time, 0) - now
+        if left <= 0 then
+            log_debug("TRUST_SOLO", string.format("待ち終了: %s (%s)", solo.name,
+                solo.count > 0 and string.format("WS %d 回のあと次が来なかった", solo.count) or "WS が出なかった"))
+            state.solos[actor_id] = nil
+        elseif left > longest then
+            longest, name = left, solo.name
+        end
+    end
+    return longest, name
 end
 
 local function find_best_ws_from_priority()
@@ -775,27 +636,42 @@ local function find_best_ws_from_priority()
 
     if is_sc_window then
         -- opener_only: 先頭のWSは始点専用。連携中は2番目以降を先に探し、どれもつながらないときだけ先頭に戻る
+        -- イオニックWSの光/闇はアフターマス中だけ付く。今アフターマスが無ければ数えない。
+        -- アフターマス頼みの連携は、自分のイオニックWSから続ける場合 (照破→照破=極光) だけ優先順どおりに選ぶ。
+        -- フェイスや他の人の光/闇、連携で出来た光/闇を締めるときは、元から光/闇を持つWS (不動など) を先に選ぶ
+        local aftermath = has_aftermath()
+        local fallback = nil
         for pass = 1, (state.opener_only and 2 or 1) do
             for priority_idx, ws_name in ipairs(state.ws_priority) do
                 local skip = state.opener_only and pass == 1 and priority_idx == first_idx
                 local ws_info = not skip and is_executable_ws(ws_name, usable) and sc_dict.find_ws_info(ws_name, state.active_weapon)
-                local lv3 = ws_info and aeonic_prop(ws_info.en)
+                local lv3 = ws_info and aftermath and aeonic_prop(ws_info.en)
+                local native = ws_info
                 if lv3 then
                     ws_info = { ja = ws_info.ja, en = ws_info.en, sc = { lv3, unpack(ws_info.sc) } }
                 end
                 if ws_info then
                     local eval = sc_dict.evaluate_ws_for_sc(ws_info, state.sc_props or state.sc_property)
                     if eval then
-                        return {
+                        local choice = {
                             ws = ws_name,
                             result_sc = eval.result,
                             priority = priority_idx,
                             reason = string.format("優先度%d [%s ➔ %s (%s)]", priority_idx, state.sc_property, eval.result, ws_name)
                         }
+                        -- アフターマスの属性を外しても同じ連携になるなら、頼っていない
+                        local plain = lv3 and sc_dict.evaluate_ws_for_sc(native, state.sc_props or state.sc_property)
+                        local needs_aftermath = lv3 and not (plain and plain.result == eval.result)
+                        if not needs_aftermath or state.sc_aeonic then
+                            return choice
+                        end
+                        choice.reason = choice.reason .. " ※アフターマス頼み"
+                        fallback = fallback or choice
                     end
                 end
             end
         end
+        if fallback then return fallback end
 
         if settings.auto_mode == "flexible" then
             return {
@@ -831,11 +707,13 @@ local function process_auto_skillchain()
 
     if settings.enabled and safe_gte(tp, min_tp) and safe_gt(now - last_ws, wait_delay) then
         local choice = find_best_ws_from_priority()
-        if choice and follow_wait_left(now) <= 0 then
+        -- フェイスが一人連携をしている間は割り込まない (終わってから撃つ)
+        if choice and follow_wait_left(now) <= 0 and solo_wait_left(now) <= 0 then
             state.last_ws_time = now
             state.pending_ws = {name = choice.ws, time = now, tp = tp}
             check_ws_usable(choice.ws, "EXECUTE")
-            log_debug("EXECUTE", string.format("Executing WS: %s (%s) [TP: %d]", choice.ws, choice.reason, tp))
+            log_debug("EXECUTE", string.format("Executing WS: %s (%s) [TP: %d / AM: %s / 連携%d回目の後 / 前の技から %.1f 秒]", choice.ws, choice.reason, tp,
+                has_aftermath() and "あり" or "なし", safe_num(state.sc_step, 0), now - safe_num(state.sc_start_time, now)))
             chat_msg(string.format("[OmniChain] WS自動実行: %s (%s)", choice.ws, choice.reason), 158)
             -- ゲーム入力は Shift-JIS のため、日本語WS名を変換して送る (AutoSkillchain と同様)
             local cmd = string.format('input /ws "%s" <t>', choice.ws)
@@ -849,7 +727,6 @@ local function process_auto_skillchain()
 end
 
 -- prerender イベント (メインルーチン)
-local SLOW_FRAME_SEC = 0.015
 local function check_pending_ws(now)
     local p = state.pending_ws
     if p and now - safe_num(p.time, now) > PENDING_WS_TIMEOUT then
@@ -861,14 +738,10 @@ end
 windower.register_event("prerender", guarded("PRERENDER", function()
     local frame_start = os.clock()
 
-    -- 監視: WS応答待ちのタイムアウト / ログの定期書き出し / 監視オーバーレイ
+    -- WS応答待ちのタイムアウト / ログの定期書き出し
     check_pending_ws(frame_start)
-    check_console_log(frame_start)
     if frame_start - monitor.last_flush > LOG_FLUSH_SEC then flush_log() end
-    monitor_hud_render()
 
-    -- 本体の処理が重いフレームを検出する (クライアントの引っかかり対策)
-    local main_start = os.clock()
     local ok, err = xpcall(function()
         -- バックグラウンド自動連携判定
         process_auto_skillchain()
@@ -910,9 +783,14 @@ windower.register_event("prerender", guarded("PRERENDER", function()
             local tp = safe_num(player.vitals and player.vitals.tp, 0)
             table.insert(lines, string.format("TP: %s / 最小%d", color_text(tostring(tp), safe_gte(tp, min_tp) and 50 or 255, 255, 100), min_tp))
 
+            local solo_left, solo_name = solo_wait_left(now)
+            if solo_left > 0 then
+                table.insert(lines, string.format("一人連携待ち: %s (あと %.1fs)", color_text(tostring(solo_name), 255, 160, 220), solo_left))
+            end
+
             local choice = find_best_ws_from_priority()
             if choice then
-                local wait_left = follow_wait_left(now)
+                local wait_left = math.max(follow_wait_left(now), solo_left)
                 local wait_str = wait_left > 0 and string.format(" (あと %.1fs)", wait_left) or ""
                 table.insert(lines, string.format("次発動予定: %s%s", color_text(choice.ws, 100, 255, 150), wait_str))
                 table.insert(lines, string.format("評価判定: %s", color_text(choice.reason, 200, 200, 255)))
@@ -935,18 +813,6 @@ windower.register_event("prerender", guarded("PRERENDER", function()
         if log_event("ERROR", "PRERENDER", tostring(err):match("^[^\n]*") or tostring(err)) then
             monitor.buffer[#monitor.buffer + 1] = tostring(err)
             flush_log(true)
-        end
-    end
-
-    local elapsed = os.clock() - main_start
-    if elapsed > SLOW_FRAME_SEC then
-        monitor.slow_frames = (monitor.slow_frames or 0) + 1
-        monitor.slow_max = math.max(monitor.slow_max or 0, elapsed)
-        -- 30秒に1回だけ、その間の件数と最大値をまとめて報告する
-        if frame_start - (monitor.slow_reported or 0) > 30 then
-            log_event("WARN", "PERF", string.format("prerender が重いフレーム %d 回 (最大 %.1fms)", monitor.slow_frames, monitor.slow_max * 1000))
-            monitor.slow_reported = frame_start
-            monitor.slow_frames, monitor.slow_max = 0, 0
         end
     end
 end))
@@ -1049,6 +915,9 @@ local function clear_sc_state()
     state.sc_expiration = 0
     state.sc_starter = ""
     state.sc_target = nil
+    state.sc_step = 0
+    state.sc_aeonic = false
+    state.solo_just_ended = false
 end
 
 -- チャットの「技連携・○○」はパケットより数秒 (実測4〜7秒) 遅れて届くことがある。
@@ -1056,7 +925,8 @@ end
 local TEXT_SC_IGNORE_SEC = 10.0
 
 -- 連携が発生した: 次段の判定は発生した連携だけを A1 とする (wiki: 3連携以降は前WSの他属性を無視)
-local function apply_chain_result(sc_name, starter, source, target_id)
+-- close_reason: この連携には続けられないと分かっているとき、その理由 (連携は終わりとし、次は始点から)
+local function apply_chain_result(sc_name, starter, source, target_id, close_reason)
     local now = safe_num(os.clock(), 0)
     if source == "TEXT_SC" and safe_lt(now, safe_num(state.last_packet_sc_time, -100) + TEXT_SC_IGNORE_SEC) then
         log_debug(source, string.format("Ignored (packet is newer): %s", sc_name))
@@ -1071,9 +941,20 @@ local function apply_chain_result(sc_name, starter, source, target_id)
     state.last_chain_time = now
     if source == "PACKET_SC" then state.last_packet_sc_time = now end
 
+    -- フェイスの一人連携の最後の技で出来た連携には、自分のWSを重ねても連携しない
+    -- (実測 2026-10-10: イロハの月輪の光に、3.2 秒後・5 秒後の不動がどちらも連携しなかった)。
+    -- そこで連携は終わりとし、次は始点から組み直す
+    if state.solo_just_ended then close_reason = close_reason or "フェイスの一人連携の最後の技" end
+    if close_reason then
+        clear_sc_state()
+        log_debug(source, string.format("Chain closed: %s (%s。続けずに始点から)", sc_name, close_reason))
+        return
+    end
+
     if sc_dict.is_terminal_chain(prev, sc_name) then
         -- 光→光 / 闇→闇 の後、極光/黒闇の後はどの WS でも連携しない
         clear_sc_state()
+        state.solos = {}   -- フェイスの一人連携もここで終わり
         log_debug(source, string.format("Chain closed: %s (prev: %s)", sc_name, tostring(prev)))
         return
     end
@@ -1081,24 +962,105 @@ local function apply_chain_result(sc_name, starter, source, target_id)
     state.sc_active = true
     state.sc_props = { sc_name }
     state.sc_property = sc_name
-    state.sc_expiration = now + sc_window_sec()
+    state.sc_step = safe_num(state.sc_step, 0) + 1
+    state.sc_aeonic = false
+    state.sc_expiration = now + sc_window_sec(state.sc_step)
     state.sc_start_time = now
     if starter then state.sc_starter = starter end
     if target_id then state.sc_target = target_id end
     log_debug(source, string.format("Chain: %s (prev: %s)", sc_name, tostring(prev)))
 end
 
--- アクションカテゴリ名 (監視ログ表示用)
+-- アクションカテゴリ名
 local CATEGORY_NAMES = {[3] = "WS", [7] = "WS構え", [11] = "TP技", [13] = "ペット技"}
 local WS_READY_INTERRUPT = 28787
 -- 命中しなかったことを示す行動メッセージ (188/189: WS ミス・効果なし / 323/324: 技 効果なし・ミス)
 local NO_HIT_MESSAGES = {[188] = true, [189] = true, [323] = true, [324] = true}
+-- アビリティの結果を示す行動メッセージ (100: 使っただけ / 102: HP回復 / 110・317: ダメージ / 158・324: ミス / 323: 効果なし)
+local JA_RESULT_MESSAGES = {[100] = true, [102] = true, [110] = true, [158] = true, [317] = true, [323] = true, [324] = true}
+-- 渾然一体で敵が連携待機になったことを示す行動メッセージと、待機が続くとみなす秒数
+local CHAINBOUND_MESSAGE = 529
+local CHAINBOUND_SEC = 10.0
+-- 一人連携が技の数 (max_ws) で終わった直後は、同じフェイスの合図を無視する秒数 (アークGK は 2 発目の後に葉隠を使うことがある)
+local SOLO_DONE_IGNORE_SEC = 6.0
 
 local function ability_name(cat, id)
     local key = CATEGORY_RESOURCES[cat == 7 and 3 or cat]
     local t = key and res and res[key]
     local a = t and t[id]
     return a and (a.ja or a.en) or ("#" .. tostring(id))
+end
+
+-- -----------------------------------------------------------------------------
+-- フェイスの一人連携待ち
+--   一人連携を狙うフェイス (sc_dict.TRUST_SOLO) が条件のアビリティ (黙想・葉隠・石火之機) を使ったら、
+--   一人連携が終わるまで自動WSを撃たない。
+--   終わりの判定: 最後の技が分かっていればその技 / 光→光・闇→闇で連携が閉じた /
+--                 フェイスのWSが solo_gap 秒来なかった / アビリティの後 solo_start_wait 秒WSが出なかった
+-- -----------------------------------------------------------------------------
+local JOB_ABILITY_CATEGORY = 6
+
+-- 0x028 カテゴリ 6: フェイスがアビリティを使った
+local function handle_trust_ability(p)
+    if settings.trust_solo == false then return end
+    local actor_id = p["Actor"]
+    if state.player_id ~= nil and actor_id == state.player_id then return end
+    local mob = windower.ffxi.get_mob_by_id(actor_id)
+    if not mob or not (mob.in_party or mob.in_alliance) then return end
+    local def = sc_dict.find_trust_solo(mob.name)
+    if not def then return end
+
+    local ability = res and res.job_abilities and res.job_abilities[safe_num(p["Param"], 0)]
+    local ability_ja = ability and ability.ja
+    for _, trigger in ipairs(def.abilities) do
+        if trigger == ability_ja then
+            local now = safe_num(os.clock(), 0)
+            local done = state.solo_done and state.solo_done[actor_id]
+            if done and now - done < SOLO_DONE_IGNORE_SEC then
+                log_debug("TRUST_SOLO", string.format("合図を無視: %s が %s を使用 (一人連携が終わった直後)", def.ja or tostring(mob.name), ability_ja))
+                return
+            end
+            local wait_until = now + safe_num(settings.solo_start_wait, 12.0)
+            local solo = state.solos[actor_id]
+            if solo then
+                -- 一人連携の途中で別の合図を使った (黙想 → WS → 葉隠 など): 数えた回数はそのままで待ちを延ばす
+                solo.until_time = math.max(safe_num(solo.until_time, 0), wait_until)
+                log_debug("TRUST_SOLO", string.format("待ち延長: %s が %s を使用 (WS %d 回の後)", solo.name, ability_ja, solo.count))
+                return
+            end
+            solo = {
+                name = def.ja or tostring(mob.name), ability = ability_ja,
+                until_time = wait_until, count = 0, last_ws = def.last_ws, max_ws = def.max_ws,
+            }
+            state.solos[actor_id] = solo
+            log_debug("TRUST_SOLO", string.format("待ち開始: %s が %s を使用 (一人連携が終わるまで自動WSを止める)", solo.name, ability_ja))
+            return
+        end
+    end
+end
+
+-- 一人連携中のフェイスがWSを撃った: 次のWSを solo_gap 秒待つ。最後の技なら待つのをやめる
+local function track_trust_solo_ws(actor_id, ws_name)
+    local solo = state.solos[actor_id]
+    if not solo then return end
+    solo.count = solo.count + 1
+    for _, last in ipairs(solo.last_ws or {}) do
+        if last == ws_name then
+            log_debug("TRUST_SOLO", string.format("待ち終了: %s の一人連携が最後の技 %s まで進んだ (WS %d 回)", solo.name, ws_name, solo.count))
+            state.solos[actor_id] = nil
+            state.solo_just_ended = true   -- この技で出来た連携には続けない (apply_chain_result が連携を閉じる)
+            return
+        end
+    end
+    if solo.max_ws and solo.count >= solo.max_ws then
+        log_debug("TRUST_SOLO", string.format("待ち終了: %s の一人連携が %d 発目 %s で終わった", solo.name, solo.count, ws_name))
+        state.solos[actor_id] = nil
+        state.solo_done = state.solo_done or {}
+        state.solo_done[actor_id] = safe_num(os.clock(), 0)
+        return
+    end
+    solo.until_time = safe_num(os.clock(), 0) + safe_num(settings.solo_gap, 11.0)
+    log_debug("TRUST_SOLO", string.format("%s の一人連携 %d 発目: %s", solo.name, solo.count, ws_name))
 end
 
 -- 自分の WS 結果を自動実行の記録と突き合わせる
@@ -1130,39 +1092,83 @@ local function handle_action_packet(data)
         return
     end
     local cat = safe_num(p["Category"], 0)
+    -- 渾然一体 (msg 529「連携待機の状態になった」): 次の WS が必ず連携になる
+    if safe_num(p["Target 1 Action 1 Message"], 0) == CHAINBOUND_MESSAGE then
+        local who = windower.ffxi.get_mob_by_id(p["Actor"])
+        state.chainbound = {target = p["Target 1 ID"], until_time = safe_num(os.clock(), 0) + CHAINBOUND_SEC}
+        log_debug("PACKET_SC", string.format("連携待機: %s が渾然一体を使用 (次の WS は必ず連携になる)", tostring(who and who.name or p["Actor"])))
+        return
+    end
+    if cat == JOB_ABILITY_CATEGORY then
+        handle_trust_ability(p)
+        return
+    end
     if not CATEGORY_NAMES[cat] then return end
+
+    -- ジャンプなど一部のアビリティは WS と同じカテゴリ 3 で届く (番号はアビリティのもの)。
+    -- WS の番号として読むと別の技 (ジャンプ 66 → ラファールアクス) になり、偽の始点を作るので、WS として扱わない
+    if cat == 3 and JA_RESULT_MESSAGES[safe_num(p["Target 1 Action 1 Message"], 0)] then
+        return
+    end
 
     local is_self = state.player_id ~= nil and p["Actor"] == state.player_id
     if is_self then track_own_action(p, cat) end
 
     local actor_mob = windower.ffxi.get_mob_by_id(p["Actor"])
-    if not is_party_actor(actor_mob) then return end
-    local actor_name = tostring(actor_mob.name or "")
+    local outsider = not is_party_actor(actor_mob)
+    if outsider then
+        -- パーティ外の人でも、自分が狙っている敵に撃った技は連携に関わる (七支公など、パーティ外と一緒に戦う敵)
+        local t = (cat == 3 or cat == 11) and actor_mob and windower.ffxi.get_mob_by_target("t")
+        if not (t and t.id == p["Target 1 ID"] and t.id ~= p["Actor"]) then return end
+    end
+    local actor_name = (outsider and "(PT外) " or "") .. tostring(actor_mob.name or "")
     local param = safe_num(p["Param"], 0)
 
     -- この技で連携が発生したか (追加効果メッセージで判定)
     local add_msg = p["Target 1 Action 1 Has Added Effect"] and safe_num(p["Target 1 Action 1 Added Effect Message"], 0) or 0
     local chain = SKILLCHAIN_MESSAGES[add_msg]
 
-    if mon_cfg.packets then
-        local ab_id = cat == 7 and safe_num(p["Target 1 Action 1 Param"], 0) or param
-        local extra
-        if cat == 7 then
-            extra = (param == WS_READY_INTERRUPT) and "中断" or "開始"
-        else
-            extra = string.format("msg:%d dmg:%d 追加:%s", safe_num(p["Target 1 Action 1 Message"], 0),
-                safe_num(p["Target 1 Action 1 Param"], 0), chain and ("技連携・" .. chain) or tostring(add_msg))
-        end
-        log_event("PKT", "0x028", string.format("%s %s:%s 対象%d %s", actor_name, CATEGORY_NAMES[cat], ability_name(cat, ab_id),
-            safe_num(p["Target Count"], 0), extra))
-    end
-
     local res_table = CATEGORY_RESOURCES[cat] and res and res[CATEGORY_RESOURCES[cat]]
     if not res_table then return end
 
+    -- 一人連携中のフェイスのWSを数える (連携が閉じた場合は apply_chain_result が待ちを解く)
+    -- 回復・強化の技 (238: HP回復 / 194: 強化 / 159: 状態異常回復) は一人連携の技として数えない
+    local solo_msg = safe_num(p["Target 1 Action 1 Message"], 0)
+    if not is_self and not (solo_msg == 238 or solo_msg == 194 or solo_msg == 159) then
+        track_trust_solo_ws(p["Actor"], ability_name(cat, param))
+    end
+
     local target_id = p["Target 1 ID"]
+    local landed = not NO_HIT_MESSAGES[solo_msg]
+    local ws_def = res_table[param]
+
+    -- 連携待機 (渾然一体) は、次に当たった WS で使われて終わる。この WS は直前の属性に関係なく連携になる。
+    -- 光/闇を持つ WS で出来た光/闇には、もう続けられない (wiki 24407: 渾然一体→不動(光)→不動(連携発生せず))
+    local close_reason = nil
+    local cb = state.chainbound
+    if cb and cb.target == target_id and landed then
+        state.chainbound = nil
+        if safe_lt(safe_num(os.clock(), 0), safe_num(cb.until_time, 0)) and (chain == "光" or chain == "闇") and ws_def then
+            local lv3 = is_self and cat == 3 and aeonic_prop(ws_def.en)
+            for _, key in ipairs({"skillchain_a", "skillchain_b", "skillchain_c"}) do
+                if ws_def[key] == "Light" or ws_def[key] == "Darkness" then lv3 = true end
+            end
+            if lv3 then close_reason = "連携待機に光/闇の WS" end
+        end
+    end
+
+    -- この技のあとは自分の WS が連携しないと分かっているもの (sc_dict.NO_FOLLOW): 連携は続けず、次は始点から
+    if not is_self and landed and not (solo_msg == 238 or solo_msg == 194 or solo_msg == 159)
+        and sc_dict.is_no_follow(actor_mob.name, ws_def and ws_def.ja) then
+        clear_sc_state()
+        state.last_packet_sc_time = safe_num(os.clock(), 0)
+        log_debug("PACKET_SC", string.format("No follow: %s %s%s (この技には続けない。次は始点から)", actor_name, ability_name(cat, param),
+            chain and (" = " .. chain) or ""))
+        return
+    end
+
     if chain then
-        apply_chain_result(chain, actor_name, "PACKET_SC", target_id)
+        apply_chain_result(chain, actor_name, "PACKET_SC", target_id, close_reason)
         return
     end
 
@@ -1181,8 +1187,10 @@ local function handle_action_packet(data)
             local en = ability[key]
             if en and en ~= "" then table.insert(props, sc_dict.EN_TO_JA_SC[en] or en) end
         end
-    elseif mon_cfg.packets then
-        log_event("WARN", "PACKET_SC", string.format("res に無い技ID: カテゴリ%d / %d", cat, param))
+        -- フェイスの技で res に連携属性が入っていないものを補う
+        if #props == 0 and cat == 11 and not is_self then
+            for _, prop in ipairs(sc_dict.TRUST_WS_EXTRA[ability.ja] or {}) do table.insert(props, prop) end
+        end
     end
     -- 自分のイオニックWSにはアフターマスの光/闇が加わる (他人の武器は分からないので自分だけ)
     local lv3 = is_self and cat == 3 and ability and aeonic_prop(ability.en)
@@ -1194,7 +1202,10 @@ local function handle_action_packet(data)
         state.last_packet_sc_time = safe_num(os.clock(), 0)
         state.sc_props = props
         state.sc_property = table.concat(props, "/")
-        state.sc_expiration = safe_num(os.clock(), 0) + sc_window_sec()
+        state.sc_step = 0
+        state.sc_aeonic = lv3 and true or false
+        state.solo_just_ended = false
+        state.sc_expiration = safe_num(os.clock(), 0) + sc_window_sec(0)
         state.sc_start_time = safe_num(os.clock(), 0)
         state.sc_starter = actor_name
         log_debug("PACKET_SC", string.format("Opener: %s from %s (Category: %d / Param: %d)", state.sc_property, actor_name, cat, param))
@@ -1210,8 +1221,6 @@ local function handle_message_packet(data)
     if FAIL_MESSAGES[msg] and state.pending_ws and p["Actor"] == state.player_id then
         log_event("WARN", "WS_FAIL", string.format("%s: %s (msg %d)", state.pending_ws.name, FAIL_MESSAGES[msg], msg))
         state.pending_ws = nil
-    elseif mon_cfg.packets then
-        log_event("PKT", "0x029", string.format("msg %d: %s", msg, action_message_text(msg)))
     end
 end
 
@@ -1270,11 +1279,13 @@ end))
 windower.register_event("zone change", guarded("ZONE", function()
     clear_sc_state()
     state.pending_ws = nil
+    state.solos = {}
     flush_log()
 end))
 windower.register_event("logout", guarded("LOGOUT", function()
     clear_sc_state()
     state.pending_ws = nil
+    state.solos = {}
     state.player_id = nil
     flush_log()
 end))
@@ -1284,17 +1295,6 @@ windower.register_event("unload", function()
         hud:hide()
     end
     if grip then grip:destroy() end
-    if monitor.hud then
-        -- ドラッグで動かした監視オーバーレイの位置を保存する
-        local x, y = monitor.hud:pos()
-        if type(mon_cfg.pos) ~= "table" then mon_cfg.pos = {} end
-        if x and y and (x ~= mon_cfg.pos.x or y ~= mon_cfg.pos.y) then
-            mon_cfg.pos.x, mon_cfg.pos.y = x, y
-            config.save(settings)
-        end
-        monitor.hud:destroy()
-        monitor.hud = nil
-    end
     log_debug("SYSTEM", "OmniChain Unloaded")
     flush_log(true)
 end)
@@ -1332,29 +1332,6 @@ windower.register_event("addon command", guarded("CMD", function(cmd, ...)
         save_hud_settings()
         chat_msg(string.format("[OmniChain] HUD の文字サイズを %d に変更しました。", size))
 
-    elseif cmd == "mon" or cmd == "monitor" then
-        local sub2 = args[2] and args[2]:lower()
-        if sub == "packet" or sub == "pkt" then
-            mon_cfg.packets = on_off_arg(sub2, mon_cfg.packets)
-            chat_msg(string.format("[OmniChain] パケット詳細記録: %s", mon_cfg.packets and "ON" or "OFF"))
-        elseif sub == "chat" then
-            mon_cfg.chat_errors = on_off_arg(sub2, mon_cfg.chat_errors ~= false)
-            chat_msg(string.format("[OmniChain] エラー/警告のチャット表示: %s", mon_cfg.chat_errors and "ON" or "OFF"))
-        elseif sub == "lines" and tonumber(args[2]) then
-            mon_cfg.lines = math.max(1, math.min(30, tonumber(args[2])))
-            chat_msg(string.format("[OmniChain] 監視オーバーレイの行数: %d", mon_cfg.lines))
-        elseif sub == "clear" then
-            monitor.recent = {}
-            monitor.counts = {ERROR = 0, WARN = 0, INFO = 0, PKT = 0}
-            monitor.throttle = {}
-            chat_msg("[OmniChain] 監視の履歴とカウンタをリセットしました。")
-        else
-            mon_cfg.show = on_off_arg(sub, mon_cfg.show)
-            chat_msg(string.format("[OmniChain] 監視オーバーレイ: %s", mon_cfg.show and "ON" or "OFF"))
-        end
-        monitor.dirty = true
-        config.save(settings)
-
     elseif cmd == "log" then
         if sub == "clear" then
             monitor.buffer = {}
@@ -1383,30 +1360,8 @@ windower.register_event("addon command", guarded("CMD", function(cmd, ...)
         else
             flush_log(true)
             chat_msg(string.format("[OmniChain] デバッグログ記録: %s (保存先: %s)", settings.debug_logging and "ON" or "OFF", log_file_path))
-            chat_msg(string.format("[OmniChain] 起動後の件数 ERROR:%d WARN:%d INFO:%d PKT:%d",
-                monitor.counts.ERROR or 0, monitor.counts.WARN or 0, monitor.counts.INFO or 0, monitor.counts.PKT or 0))
-        end
-
-    elseif cmd == "console" then
-        if sub == "on" or sub == "off" then
-            mon_cfg.console = (sub == "on")
-            config.save(settings)
-            chat_msg(string.format("[OmniChain] console.log 監視: %s (%s)", mon_cfg.console and "ON" or "OFF", console_path))
-        else
-            -- console.log の末尾から最近のエラーを一覧する (起動前の分も含む)
-            local n = math.max(1, math.min(20, tonumber(sub) or 5))
-            local size = console_size()
-            if not size then
-                chat_msg("[OmniChain] console.log が開けません: " .. console_path, 167)
-                return
-            end
-            local groups = parse_console_errors(read_console(math.max(0, size - 256 * 1024), size) or "")
-            chat_msg(string.format("=== console.log のエラー 直近 %d 件 (全 %d 件) ===", math.min(n, #groups), #groups))
-            for i = math.max(1, #groups - n + 1), #groups do
-                local g = groups[i]
-                chat_msg(string.format("%s [%s] %s", g.time, g.addon, utf8_trim(g.text, 120)), 159)
-                if g.hint then chat_msg("    → 対処: " .. g.hint, 207) end
-            end
+            chat_msg(string.format("[OmniChain] 起動後の件数 ERROR:%d WARN:%d INFO:%d",
+                monitor.counts.ERROR or 0, monitor.counts.WARN or 0, monitor.counts.INFO or 0))
         end
 
     elseif cmd == "check" then
@@ -1434,6 +1389,37 @@ windower.register_event("addon command", guarded("CMD", function(cmd, ...)
         end
         chat_msg(string.format("[OmniChain] 手動始点モードの待ち時間: %.1f 秒", safe_num(settings.follow_wait, 6.0)))
 
+    elseif cmd == "minfollow" then
+        -- 直前のWSから次の自動WSまでの最短秒数: //omni minfollow <秒>
+        local sec = tonumber(sub)
+        if sec and sec >= 0 and sec <= 8 then
+            settings.min_follow = sec
+            config.save(settings)
+        elseif sub then
+            chat_msg("[OmniChain] 秒数は 0〜8 で指定してください (例: //omni minfollow 3.3)。")
+        end
+        chat_msg(string.format("[OmniChain] 直前のWSから次の自動WSまでの最短: %.1f 秒", safe_num(settings.min_follow, 3.3)))
+        log_debug("CMD", "Min follow: " .. tostring(settings.min_follow))
+
+    elseif cmd == "solo" then
+        -- フェイスの一人連携待ち: //omni solo [on|off] / start <秒> / gap <秒>
+        local sec = tonumber(args[2])
+        if sub == "start" or sub == "gap" then
+            if sec and sec >= 1 and sec <= 30 then
+                if sub == "start" then settings.solo_start_wait = sec else settings.solo_gap = sec end
+                config.save(settings)
+            else
+                chat_msg("[OmniChain] 秒数は 1〜30 で指定してください (例: //omni solo gap 6)。")
+            end
+        elseif sub == "on" or sub == "off" then
+            settings.trust_solo = (sub == "on")
+            if not settings.trust_solo then state.solos = {} end
+            config.save(settings)
+        end
+        chat_msg(string.format("[OmniChain] フェイスの一人連携待ち: %s (アビリティの後 %.1f 秒 / WSの間隔 %.1f 秒)",
+            settings.trust_solo ~= false and "ON" or "OFF", safe_num(settings.solo_start_wait, 12.0), safe_num(settings.solo_gap, 11.0)))
+        log_debug("CMD", "Trust solo wait: " .. tostring(settings.trust_solo))
+
     elseif cmd == "reload" or cmd == "load" then
         update_job_profile()
         chat_msg(string.format("[OmniChain] 設定ファイルを再ロードしました。(Job: %s / 武器: %s)", state.active_job, state.active_weapon))
@@ -1443,26 +1429,21 @@ windower.register_event("addon command", guarded("CMD", function(cmd, ...)
         chat_msg(string.format("機能ステータス: %s / 最小TP: %d / HUD表示: %s", settings.enabled and "ON" or "OFF", safe_num(settings.min_tp, 1000), settings.show_hud and "ON" or "OFF"))
         chat_msg(string.format("始点: %s", settings.start_mode == "manual"
             and string.format("手動 (待ち %.1f 秒)", safe_num(settings.follow_wait, 6.0)) or "自動"))
+        chat_msg(string.format("フェイスの一人連携待ち: %s (アビリティの後 %.1f 秒 / WSの間隔 %.1f 秒)",
+            settings.trust_solo ~= false and "ON" or "OFF", safe_num(settings.solo_start_wait, 12.0), safe_num(settings.solo_gap, 11.0)))
         chat_msg(string.format("現在ジョブ: %s / 武器種: %s", state.active_job, state.active_weapon))
         chat_msg(string.format("WS優先順位: %s", table.concat(state.ws_priority, " > ")))
-        chat_msg(string.format("監視: オーバーレイ %s / パケット詳細 %s / ログ記録 %s / console.log %s",
-            mon_cfg.show and "ON" or "OFF", mon_cfg.packets and "ON" or "OFF", settings.debug_logging and "ON" or "OFF",
-            mon_cfg.console ~= false and "ON" or "OFF"))
 
     else
         chat_msg("=== OmniChain コマンドヘルプ ===")
         chat_msg("//omni enable / disable       : 自動連携 ON / OFF 切替")
         chat_msg("//omni start manual / auto    : 1回目のWSを自分で撃つ / 自動で撃つ")
         chat_msg("//omni wait <秒>              : 手動始点モードで自動WSを撃つまで待つ秒数 (初期値 6)")
+        chat_msg("//omni solo [on|off]          : フェイスの一人連携が終わるまで待つ (start <秒> / gap <秒> で調整)")
         chat_msg("//omni hud [on|off]           : HUDオーバーレイ画面の表示切替")
         chat_msg("//omni size <数>              : HUD の文字サイズ (6〜40)。HUD上のホイール / 右下の角のドラッグでも変更可")
-        chat_msg("//omni mon [on|off]           : リアルタイム監視オーバーレイの表示切替")
-        chat_msg("//omni mon packet [on|off]    : 技パケット(0x028/0x029)の詳細記録")
-        chat_msg("//omni mon chat [on|off]      : エラー/警告のチャット即時表示")
-        chat_msg("//omni mon lines <n> / clear  : 表示行数 / 履歴リセット")
         chat_msg("//omni log [on|off|clear]     : ログファイル記録の切替・消去")
         chat_msg("//omni log tail [n] / err [n] : 直近の記録 / エラーと警告をチャット表示")
-        chat_msg("//omni console [n] / on|off   : console.log のエラー一覧 / 監視切替")
         chat_msg("//omni check                  : 優先リストのWSが使えるか点検")
         chat_msg("詳しくは addons/OmniChain/COMMANDS.txt を参照")
         chat_msg("//omni reload                 : JSON設定ファイルの再読み込み")
