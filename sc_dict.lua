@@ -1,5 +1,5 @@
 -- =============================================================================
--- sc_dict.lua : 全14武器種 WS ＋ PUPオートマトンWS ＋ SMN契約の履行 統合マトリクス辞書 (v7.0.5)
+-- sc_dict.lua : 全14武器種 WS ＋ PUPオートマトンWS ＋ SMN契約の履行 統合マトリクス辞書 (v7.3.0)
 -- =============================================================================
 
 local sc_dict = {}
@@ -472,6 +472,53 @@ end
 
 function sc_dict.get_pet_properties(pet_ability_name)
     return sc_dict.PUP_WS_DATABASE[pet_ability_name] or sc_dict.SMN_BP_DATABASE[pet_ability_name]
+end
+
+-- -----------------------------------------------------------------------------
+-- フェイス (v7.3.0)
+--   フェイスの技の連携属性は res/monster_abilities.lua に入っている (0x028 のカテゴリ 11)。
+--   wiki.ffo.jp のフェイス 111 体・303 技と突き合わせ、res に属性が無い技だけをここで補う。
+--   連携属性の載っていない技は、連携の初段として扱わない
+-- -----------------------------------------------------------------------------
+sc_dict.TRUST_WS_EXTRA = {
+    ["エターナル・ヴァナ・イリュージョン"] = {"核熱"},   -- ミュモルII
+    ["ファイナル・エターナル・ハート"]     = {"分解"},   -- ミュモルII
+}
+
+-- 一人連携を狙うフェイス (wiki.ffo.jp/html/31462.html の特徴欄「○○が使用可能な時は一人連携を狙う」)
+--   キー      : フェイスの名前 (敵味方の一覧に出る英語名) を小文字にして英字以外を除いたもの
+--   abilities : このアビリティをフェイスが使ったら「これから一人連携をする」とみなす
+--   last_ws   : 一人連携の最後の技が分かっているもの (これが出たら一人連携は終わり。出来た連携には続けない)
+--   max_ws    : 一人連携の技の数が決まっているもの (この数を撃ったら一人連携は終わり。出来た連携には続けてよい)
+sc_dict.TRUST_SOLO = {
+    -- テンゼンも一人連携をする (黙想・葉隠) が、技の順番が毎回違い 40 秒ほど続くので、待たずに割り込む (ユーザー判断 2026-10-10)
+    iroha     = { ja = "イロハ",         abilities = {"黙想"},               last_ws = {"天つ水影流・月輪"} },  -- II も同じ名前
+    noillurie = { ja = "ノユリ",         abilities = {"石火之機"},           last_ws = {"零之太刀・回天"} },
+    gilgamesh = { ja = "ギルガメッシュ", abilities = {"石火之機"} },  -- wiki は葉隠も挙げるが、葉隠だけでは一人連携をしなかった (実測 2026-10-10)
+    -- アークGK は 石火之機 → 黙想 → 1 発目 → 葉隠 → 2 発目 の順で、一人連携は 2 発で終わる (実測 2026-10-10、3 回とも)
+    arkgk     = { ja = "アークGK",       abilities = {"黙想", "葉隠", "石火之機"}, max_ws = 2 },
+}
+sc_dict.TRUST_SOLO.aagk = sc_dict.TRUST_SOLO.arkgk
+
+-- この技のあとは、自分の WS を重ねても連携しない (実測 2026-10-10)。続けずに始点から組み直す
+--   actors : フェイスの名前 (TRUST_SOLO と同じ形のキー)。そのフェイスの技すべて
+--            セルテウス: 4〜5 秒後の WS が 13 回とも連携しなかった
+--   ws     : 技の名前。イロハの月輪: 始点・連携のどちらのあとも、3〜7 秒後の WS が 1 回も連携しなかった
+sc_dict.NO_FOLLOW = {
+    actors = { selhteus = true },
+    ws     = { ["天つ水影流・月輪"] = true },
+}
+
+function sc_dict.is_no_follow(mob_name, ws_name)
+    if ws_name and sc_dict.NO_FOLLOW.ws[ws_name] then return true end
+    if type(mob_name) ~= "string" then return false end
+    return sc_dict.NO_FOLLOW.actors[(mob_name:lower():gsub("[^a-z]", ""))] == true
+end
+
+-- 名前から一人連携フェイスの定義を引く (該当しなければ nil)
+function sc_dict.find_trust_solo(mob_name)
+    if type(mob_name) ~= "string" then return nil end
+    return sc_dict.TRUST_SOLO[(mob_name:lower():gsub("[^a-z]", ""))]
 end
 
 return sc_dict
