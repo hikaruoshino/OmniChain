@@ -1,10 +1,10 @@
 -- =============================================================================
--- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.3.0 - フェイスの一人連携待ち)
+-- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.3.1 - 渾然一体と待ち時間の修正)
 -- =============================================================================
 
 _addon.name     = "OmniChain"
 _addon.author   = "hikaruoshino"
-_addon.version  = "7.3.0"
+_addon.version  = "7.3.1"
 _addon.commands = {"omni", "omnichain"}
 
 require("luau")
@@ -570,26 +570,46 @@ local function is_executable_ws(ws_name, usable)
 end
 
 -- 連携窓の秒数。manual は他人の横槍を待ってから撃つため、受付の上限 (BG-Wiki: 3〜10秒) まで見る
--- 連携が続くたびに受付は 1 秒ずつ短くなる (実測 2026-10-10: 3 回連携した後の WS から 7 秒強で撃ったWSは連携しなかった)
-local SC_WINDOW_MIN_SEC = 5.0
+-- 連携の受付時間 (前の技が当たってから閉じるまで) の見込み。連携が続くたびに 1 秒ずつ短くなる。
+-- 実測 (2026-10-10〜11、技のパケットから次の自動WSを入力するまでの秒数。着弾はその約 0.7 秒後):
+--   始点から 9〜12 秒後でも連携した / 連携 2 回目の後 6.0 秒 = 連携 / 3 回目の後 6.0 秒 = 連携したりしなかったり /
+--   4 回目・5 回目の後 6.0 秒 = 連携せず
+--   3 回目の後 5.8 秒 (余裕 1.2 秒) = 2 回連携・1 回連携せず (2026-10-11 夜) → 余裕を 2.0 秒に広げた
+local SC_WINDOW_BASE_SEC = 10.0
+local SC_WINDOW_MIN_SEC = 4.0
+local SC_LAND_MARGIN_SEC = 2.0   -- 入力してから着弾するまでの余裕 (受付が閉じるこの秒数前までに入力する)
+local SC_OPEN_SEC = 3.3          -- 受付が開くまでの秒数 (これより早く撃つと連携しない)
+-- 連携待機に当てたとき、Lv2 の属性から出来る Lv3 の連携 (wiki.ffo.jp/html/24407。分解だけは分解のまま)
+local CHAINBOUND_LV3 = {["核熱"] = "光", ["重力"] = "闇", ["湾曲"] = "闇"}
 local function sc_window_sec(step)
-    local base = settings.start_mode == "manual" and 10.0 or 8.0
-    -- min_follow を長くしている場合は、その 1 秒後までは受付が続いているものとして扱う (待っている間に見込みが切れて始点に戻るのを防ぐ)
-    return math.max(SC_WINDOW_MIN_SEC, base - safe_num(step, 0), safe_num(settings.min_follow, 3.3) + 1.0)
+    return math.max(SC_WINDOW_MIN_SEC, SC_WINDOW_BASE_SEC - safe_num(step, 0))
 end
 
--- manual: 自動WSを撃てるまでの残り秒数 (直前のWSが当たってから follow_wait 秒)。auto は常に 0
--- 連携が続いて受付が短くなっているときは、受付が閉じる 2 秒前までに撃てるよう待ち時間を詰める (最短 3 秒)
--- 連携の受付は、前の技が当たってから約 3 秒後に開く。それより早く撃つと連携せず、前の人の連携も切ってしまう
--- (実測 2026-10-10: イロハの月輪の 2.9 秒後に撃った花車は連携しなかった。3.0〜3.1 秒後は連携した)。
--- 連携窓があるあいだは、自動始点モードでも min_follow 秒は待つ
+-- 自動WSを撃てるまでの残り秒数。
+--   ・連携の受付は、前の技が当たってから約 3 秒後に開く。それより早く撃つと連携せず、前の人の連携も切ってしまう
+--     (実測 2026-10-10: イロハの月輪の 2.9 秒後に撃った花車は連携しなかった。3.0〜3.1 秒後は連携した)。
+--   ・連携窓があるあいだは min_follow 秒待つ。ただし連携が続いて受付が短くなっているときは、
+--     受付が閉じる前に着弾するよう待ち時間を詰める (最短 SC_OPEN_SEC)。
+--   ・manual はさらに follow_wait 秒 (受付が閉じる 2 秒前まで) 待つ。
+--   ・渾然一体 (連携待機) の直後も同じく待つ。待機が付いてから 2 秒以内に当てたWSは連携せず、待機も消えた
+--     (実測 2026-10-11: 0〜2 秒後は 4 回とも連携せず、3 秒後は 2 回とも連携)。
 local function follow_wait_left(now)
-    if not (state.sc_active and safe_lt(now, safe_num(state.sc_expiration, 0))) then return 0 end
-    local wait = safe_num(settings.min_follow, 3.3)
-    if settings.start_mode == "manual" then
-        wait = math.max(wait, math.min(safe_num(settings.follow_wait, 6.0), math.max(3.0, sc_window_sec(state.sc_step) - 2.0)))
+    local left = 0
+    local cb = state.chainbound
+    if cb and safe_lt(now, safe_num(cb.until_time, 0)) then
+        -- 連携待機は味方の WS を待っている (アークGK は TP が無いときにも使う) ので、受付が開いたらすぐ使う。
+        -- それまでの連携の状態は待機で上書きされているので、連携窓の待ち時間は見ない
+        return math.max(0, safe_num(cb.start_time, 0) + SC_OPEN_SEC - now)
     end
-    return math.max(0, safe_num(state.sc_start_time, 0) + wait - now)
+    if state.sc_active and safe_lt(now, safe_num(state.sc_expiration, 0)) then
+        local window = sc_window_sec(state.sc_step)
+        local wait = math.max(SC_OPEN_SEC, math.min(safe_num(settings.min_follow, 3.3), window - SC_LAND_MARGIN_SEC))
+        if settings.start_mode == "manual" then
+            wait = math.max(wait, math.min(safe_num(settings.follow_wait, 6.0), math.max(3.0, window - 2.0)))
+        end
+        left = math.max(left, safe_num(state.sc_start_time, 0) + wait - now)
+    end
+    return math.max(0, left)
 end
 
 -- フェイスの一人連携が終わるまでの残り秒数 (待っていなければ 0)。期限が過ぎていたらここで片付ける
@@ -633,6 +653,48 @@ local function find_best_ws_from_priority()
         if is_executable_ws(ws_name, usable) then first_idx, first_ws = idx, ws_name break end
     end
     if not first_ws then return nil end
+
+    -- 連携待機 (渾然一体) が自分の敵に付いている: 次の WS は直前の属性に関係なく連携になる。
+    -- 結果は WS の属性で決まる (wiki.ffo.jp/html/24407): 光/闇を持つ WS = その光/闇 (そこで終わり) /
+    -- 核熱 = 光、重力・湾曲 = 闇 (もう一度続けられる) / 分解 = 分解 / Lv1 = その属性。
+    -- 続けられる光/闇 > 終わりの光/闇 > Lv2 > Lv1 の順で、同じなら優先リストの上から選ぶ
+    local cb = state.chainbound
+    if cb and safe_lt(now, safe_num(cb.until_time, 0)) then
+        local t = windower.ffxi.get_mob_by_target('t')
+        if t and t.id == cb.target then
+            local aftermath = has_aftermath()
+            local best
+            for idx, ws_name in ipairs(state.ws_priority) do
+                local info = is_executable_ws(ws_name, usable) and sc_dict.find_ws_info(ws_name, state.active_weapon)
+                if info and info.sc and info.sc[1] then
+                    local result, score = nil, 0
+                    local lv3 = aftermath and aeonic_prop(info.en)
+                    for _, prop in ipairs(info.sc) do
+                        if prop == "光" or prop == "闇" then lv3 = lv3 or prop end
+                    end
+                    if lv3 then
+                        result, score = lv3, 3
+                    elseif CHAINBOUND_LV3[info.sc[1]] then
+                        result, score = CHAINBOUND_LV3[info.sc[1]], 4
+                    else
+                        result = info.sc[1]
+                        score = (sc_dict.SC_ELEMENTS[result] and sc_dict.SC_ELEMENTS[result].level or 1) >= 2 and 2 or 1
+                    end
+                    if not best or score > best.score then
+                        best = {ws = ws_name, result = result, score = score, idx = idx}
+                    end
+                end
+            end
+            if best then
+                return {
+                    ws = best.ws,
+                    result_sc = best.result,
+                    priority = best.idx,
+                    reason = string.format("優先度%d [連携待機 ➔ %s (%s)]", best.idx, best.result, best.ws)
+                }
+            end
+        end
+    end
 
     if is_sc_window then
         -- opener_only: 先頭のWSは始点専用。連携中は2番目以降を先に探し、どれもつながらないときだけ先頭に戻る
@@ -975,8 +1037,11 @@ end
 local CATEGORY_NAMES = {[3] = "WS", [7] = "WS構え", [11] = "TP技", [13] = "ペット技"}
 local WS_READY_INTERRUPT = 28787
 -- 命中しなかったことを示す行動メッセージ (188/189: WS ミス・効果なし / 323/324: 技 効果なし・ミス)
-local NO_HIT_MESSAGES = {[188] = true, [189] = true, [323] = true, [324] = true}
+local NO_HIT_MESSAGES = {[31] = true, [188] = true, [189] = true, [323] = true, [324] = true}   -- 31: 分身 (空蝉) で消された
 -- アビリティの結果を示す行動メッセージ (100: 使っただけ / 102: HP回復 / 110・317: ダメージ / 158・324: ミス / 323: 効果なし)
+-- 通常攻撃の結果のメッセージ (1: 命中 / 15: ミス / 67: クリティカル / 352〜354・576・577: 遠隔攻撃)。
+-- フェイスの通常攻撃には、特殊技と同じカテゴリ 11 で届くものがある (アシェラの #3455〜3460)。WS ではないので連携に数えない
+local AUTO_ATTACK_MESSAGES = {[1] = true, [15] = true, [67] = true, [352] = true, [353] = true, [354] = true, [576] = true, [577] = true}
 local JA_RESULT_MESSAGES = {[100] = true, [102] = true, [110] = true, [158] = true, [317] = true, [323] = true, [324] = true}
 -- 渾然一体で敵が連携待機になったことを示す行動メッセージと、待機が続くとみなす秒数
 local CHAINBOUND_MESSAGE = 529
@@ -1095,8 +1160,9 @@ local function handle_action_packet(data)
     -- 渾然一体 (msg 529「連携待機の状態になった」): 次の WS が必ず連携になる
     if safe_num(p["Target 1 Action 1 Message"], 0) == CHAINBOUND_MESSAGE then
         local who = windower.ffxi.get_mob_by_id(p["Actor"])
-        state.chainbound = {target = p["Target 1 ID"], until_time = safe_num(os.clock(), 0) + CHAINBOUND_SEC}
-        log_debug("PACKET_SC", string.format("連携待機: %s が渾然一体を使用 (次の WS は必ず連携になる)", tostring(who and who.name or p["Actor"])))
+        local cb_now = safe_num(os.clock(), 0)
+        state.chainbound = {target = p["Target 1 ID"], start_time = cb_now, until_time = cb_now + CHAINBOUND_SEC}
+        log_debug("PACKET_SC", string.format("連携待機: %s が渾然一体を使用 (約 3 秒後からの最初の WS が連携になる)", tostring(who and who.name or p["Actor"])))
         return
     end
     if cat == JOB_ABILITY_CATEGORY then
@@ -1131,6 +1197,10 @@ local function handle_action_packet(data)
     local res_table = CATEGORY_RESOURCES[cat] and res and res[CATEGORY_RESOURCES[cat]]
     if not res_table then return end
 
+    -- カテゴリ 11 で届く通常攻撃は WS ではない。連携・連携待機 (渾然一体)・一人連携のどれにも数えない
+    -- (実測 2026-10-11: アシェラの通常攻撃を WS と読んで連携待機を消し、5 回中 3 回、待機に合わせた WS を撃てなかった)
+    if cat == 11 and AUTO_ATTACK_MESSAGES[safe_num(p["Target 1 Action 1 Message"], 0)] then return end
+
     -- 一人連携中のフェイスのWSを数える (連携が閉じた場合は apply_chain_result が待ちを解く)
     -- 回復・強化の技 (238: HP回復 / 194: 強化 / 159: 状態異常回復) は一人連携の技として数えない
     local solo_msg = safe_num(p["Target 1 Action 1 Message"], 0)
@@ -1154,6 +1224,15 @@ local function handle_action_packet(data)
                 if ws_def[key] == "Light" or ws_def[key] == "Darkness" then lv3 = true end
             end
             if lv3 then close_reason = "連携待機に光/闇の WS" end
+        end
+        -- 待機の受付が開く前 (付いてから約 3 秒以内) に当たった WS は連携にならず、待機も消える。
+        -- この WS は始点にもならない (実測 2026-10-11 19:48:17: 0 秒後に当たった照破に、次の照破が連携しなかった)
+        if not chain and safe_lt(safe_num(os.clock(), 0), safe_num(cb.until_time, 0)) then
+            clear_sc_state()
+            state.last_packet_sc_time = safe_num(os.clock(), 0)
+            log_debug("PACKET_SC", string.format("連携待機が空振り: %s %s (待機から %.1f 秒。始点に数えない)", actor_name,
+                ability_name(cat, param), safe_num(os.clock(), 0) - safe_num(cb.start_time, 0)))
+            return
         end
     end
 
