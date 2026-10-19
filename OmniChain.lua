@@ -1,10 +1,10 @@
 -- =============================================================================
--- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.3.1 - 渾然一体と待ち時間の修正)
+-- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.4.0 - 別の敵を無視・最大威力・トス)
 -- =============================================================================
 
 _addon.name     = "OmniChain"
 _addon.author   = "hikaruoshino"
-_addon.version  = "7.3.1"
+_addon.version  = "7.4.0"
 _addon.commands = {"omni", "omnichain"}
 
 require("luau")
@@ -54,7 +54,11 @@ defaults.auto_mode = "flexible" -- "flexible", "strict", "lead_only"
 defaults.wait_delay = 1.2
 defaults.start_mode = "auto"  -- "auto": 1回目も自動 / "manual": 1回目は自分 (誰かの始点に続けて自動連携)
 defaults.follow_wait = 6.0    -- manual: 直前のWSが当たってから自動WSを撃つまでの秒数 (他人の横槍を待つ)
-defaults.min_follow = 3.3     -- 直前のWS (誰のものでも) が当たってから、次の自動WSを撃つまでの最短秒数 (連携の受付が開くのを待つ)
+defaults.open_player = 3.3    -- 前の WS が自分・PT の人 (フェイス以外) のとき、受付が開くまでと見なす秒数 (試験用。フェイスは 3.3 秒のまま)
+defaults.focus_max = true      -- 同じ敵を PT の人全員が狙っているときは、連携・トスをやめて一番威力の高い WS を撃つ (侍)
+defaults.toss = true          -- PT の人の次の WS を予測し、近いときはその人が連携しやすい属性になる WS を選ぶ
+defaults.ws_reach = 3.5       -- 近接 WS (射程 2) を撃ってよい距離。distanceplus に出る数字 (敵の大きさは引かない)
+defaults.min_follow = 4.0     -- 直前のWS (誰のものでも) が当たってから、次の自動WSを撃つまでの最短秒数 (連携の受付が開くのを待つ)
 -- フェイスの一人連携待ち (イロハ・ノユリ・ギルガメッシュ・アークGK。テンゼンは待たない)
 defaults.trust_solo = true        -- 一人連携を狙うフェイスが条件のアビリティを使ったら、終わるまで自動WSを撃たない
 defaults.solo_start_wait = 12.0   -- アビリティを使ってから最初のWSが出るまで待つ秒数 (出なければ待つのをやめる)
@@ -359,6 +363,35 @@ local function ws_id_by_name(ws_name)
     return found or nil
 end
 
+-- WS が届く距離か。届かない距離では撃たない (撃っても「対象が遠い」で空振りする)。
+-- 近接 WS (射程 2) は distanceplus に出る距離が settings.ws_reach (既定 3.5) 以下のとき (作者の経験則)。
+-- それ以外の射程は distanceplus と同じ式: 距離 < 敵の model_size + 射程 × 補正 + 自分の model_size (射程の番号は res の range)
+local WS_RANGE_MULT = {
+    [2] = 1.55, [3] = 1.490909, [4] = 1.44, [5] = 1.377778, [6] = 1.30, [7] = 1.15,
+    [8] = 1.25, [9] = 1.377778, [10] = 1.45, [11] = 1.454545454545455, [12] = 1.666666666666667,
+}
+local WS_RANGE_MARGIN = 0.2   -- 境目で入力が間に合わず空振りしないよう、届く距離より少し内側を使う
+-- 戻り値: 届くなら true, 届かないなら false と (距離, 届く距離)。調べられないときは true
+local function ws_in_range(ws_name)
+    local id = ws_id_by_name(ws_name)
+    local ws = id and res and res.weapon_skills and res.weapon_skills[id]
+    local mult = ws and WS_RANGE_MULT[ws.range]
+    if not mult then return true end
+    local t = windower.ffxi.get_mob_by_target('t')
+    if ws.range == 2 then
+        if not t or not t.distance then return true end
+        local melee_reach = safe_num(settings.ws_reach, 3.5)
+        local d = math.sqrt(safe_num(t.distance, 0))
+        return d <= melee_reach, d, melee_reach
+    end
+    local me = windower.ffxi.get_mob_by_target('me') or windower.ffxi.get_player()
+    if not t or not t.distance or not t.model_size then return true end
+    local my_size = safe_num(me and me.model_size, 0)
+    local dist = math.sqrt(safe_num(t.distance, 0))
+    local reach = t.model_size + ws.range * mult + my_size - WS_RANGE_MARGIN
+    return dist <= reach, dist, reach
+end
+
 -- 装備中の武器の英語名 {main=, range=}。HUD が毎フレーム呼ぶため1秒だけ使い回す
 local weapon_cache = {time = -1, names = {}}
 local function equipped_weapon_names()
@@ -373,6 +406,7 @@ local function equipped_weapon_names()
             local item = windower.ffxi.get_items(eq[slot .. '_bag'], index)
             local info = item and res and res.items and res.items[item.id]
             names[slot] = info and info.en
+            names[slot .. '_ja'] = info and info.ja
         end
     end
     weapon_cache.names = names
@@ -593,7 +627,18 @@ end
 --   ・manual はさらに follow_wait 秒 (受付が閉じる 2 秒前まで) 待つ。
 --   ・渾然一体 (連携待機) の直後も同じく待つ。待機が付いてから 2 秒以内に当てたWSは連携せず、待機も消えた
 --     (実測 2026-10-11: 0〜2 秒後は 4 回とも連携せず、3 秒後は 2 回とも連携)。
-local function follow_wait_left(now)
+-- 始点から今までの WS がすべて自分のもの (他の人の連携ではない) で、TP が満タン (3000) なら、
+-- min_follow を待たずに受付が開いた時点 (SC_OPEN_SEC) で撃つ。他の人の割り込みを待つ必要がなく、TP を捨てないため
+local FULL_TP = 3000
+local MIN_FOLLOW_FLOOR = 4.0   -- min_follow の下限 (作者の指定)
+local function open_sec()
+    local k = state.sc_last_kind
+    if k == "self" or k == "player" then
+        return math.min(SC_OPEN_SEC, math.max(0, safe_num(settings.open_player, SC_OPEN_SEC)))
+    end
+    return SC_OPEN_SEC
+end
+local function follow_wait_left(now, tp)
     local left = 0
     local cb = state.chainbound
     if cb and safe_lt(now, safe_num(cb.until_time, 0)) then
@@ -601,12 +646,19 @@ local function follow_wait_left(now)
         -- それまでの連携の状態は待機で上書きされているので、連携窓の待ち時間は見ない
         return math.max(0, safe_num(cb.start_time, 0) + SC_OPEN_SEC - now)
     end
-    if state.sc_active and safe_lt(now, safe_num(state.sc_expiration, 0)) then
+    local window_on_other = false
+    if state.sc_active and state.sc_target then
+        -- 連携が付いている敵と今の敵が違う (別の敵に移った等) なら、その連携は待たない
+        local t = windower.ffxi.get_mob_by_target('t')
+        window_on_other = t and t.id ~= state.sc_target or false
+    end
+    if state.sc_active and not window_on_other and safe_lt(now, safe_num(state.sc_expiration, 0)) then
         local window = sc_window_sec(state.sc_step)
-        local wait = math.max(SC_OPEN_SEC, math.min(safe_num(settings.min_follow, 3.3), window - SC_LAND_MARGIN_SEC))
+        local wait = math.max(open_sec(), math.min(math.max(MIN_FOLLOW_FLOOR, safe_num(settings.min_follow, MIN_FOLLOW_FLOOR)), window - SC_LAND_MARGIN_SEC))
         if settings.start_mode == "manual" then
             wait = math.max(wait, math.min(safe_num(settings.follow_wait, 6.0), math.max(3.0, window - 2.0)))
         end
+        if tp and state.sc_self_only and safe_gte(tp, FULL_TP) then wait = open_sec() end
         left = math.max(left, safe_num(state.sc_start_time, 0) + wait - now)
     end
     return math.max(0, left)
@@ -634,7 +686,7 @@ local function solo_wait_left(now)
     return longest, name
 end
 
-local function find_best_ws_from_priority()
+local function find_base_ws_from_priority()
     if not state.ws_priority or #state.ws_priority == 0 then return nil end
 
     local now = safe_num(os.clock(), 0)
@@ -756,6 +808,247 @@ local function find_best_ws_from_priority()
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- PT の人へのトス: 決まった WS を撃つ傾向のある PT の人 (フェイスは除く) の次の WS を予測し、
+-- 近いときは、その WS が続けられる属性になる WS を選ぶ (近いときだけトスを優先)。
+-- 予測は「直近 8 回の WS の最頻 (6 割以上) と、撃つ間隔の中央値」から。
+-- ---------------------------------------------------------------------------
+local PT_HIST_KEEP = 8
+local PT_HIST_AGE = 120.0       -- この秒数撃っていない人は予測に使わない
+-- トスは成功率が目的ではない (作者の方針: 相手には撃ちたいタイミングがある。トスを上げるのが大事で、撃つかは相手次第。
+-- 敵にできるだけダメージを与えるためのトス)。
+local TOSS_NEAR_MIN = 2.5       -- 次の WS まで、この秒数以上〜
+local TOSS_NEAR_MAX = 8.0       -- この秒数以内なら「近い」
+local pt_hist = {}              -- [actor_id] = {name=, times={}, names={}}
+
+local function record_pt_ws(actor_id, actor_name, ws_name)
+    local h = pt_hist[actor_id]
+    if not h then
+        h = {name = actor_name, times = {}, names = {}}
+        pt_hist[actor_id] = h
+    end
+    h.times[#h.times + 1] = safe_num(os.clock(), 0)
+    h.names[#h.names + 1] = ws_name
+    if #h.times > PT_HIST_KEEP then
+        table.remove(h.times, 1)
+        table.remove(h.names, 1)
+    end
+end
+
+local function ws_props_by_name(ws_name)
+    local id = ws_id_by_name(ws_name)
+    local ws = id and res and res.weapon_skills and res.weapon_skills[id]
+    if not ws then return nil end
+    local props = {}
+    for _, key in ipairs({"skillchain_a", "skillchain_b", "skillchain_c"}) do
+        local en = ws[key]
+        if en and en ~= "" then props[#props + 1] = sc_dict.EN_TO_JA_SC[en] or en end
+    end
+    return #props > 0 and props or nil
+end
+
+-- 近いうちに撃ちそうな PT の人の WS の一覧 {actor=, ws=, props=, eta=}
+local function predicted_pt_ws(now)
+    local list = {}
+    for actor_id, h in pairs(pt_hist) do
+        local n = #h.times
+        if n == 0 or now - h.times[n] > PT_HIST_AGE then
+            pt_hist[actor_id] = nil
+        elseif n >= 3 then
+            local cnt, best, best_n = {}, nil, 0
+            for _, name in ipairs(h.names) do
+                cnt[name] = (cnt[name] or 0) + 1
+                if cnt[name] > best_n then best, best_n = name, cnt[name] end
+            end
+            if best_n / n >= 0.6 then
+                local gaps = {}
+                for i = 2, n do gaps[#gaps + 1] = h.times[i] - h.times[i - 1] end
+                table.sort(gaps)
+                local gap = math.min(25, math.max(4, gaps[math.ceil(#gaps / 2)]))
+                local nxt, guard = h.times[n] + gap, 0
+                while nxt < now - 1 and guard < 4 do nxt = nxt + gap; guard = guard + 1 end
+                local eta = nxt - now
+                local props = ws_props_by_name(best)
+                if props and eta >= TOSS_NEAR_MIN and eta <= TOSS_NEAR_MAX then
+                    list[#list + 1] = {actor = h.name, ws = best, props = props, eta = eta}
+                end
+            end
+        end
+    end
+    return list
+end
+
+-- 自分の WS で出来る属性 (配列) に、予測した WS のどれかが続けられるか
+local function toss_target(result_props, preds)
+    for _, pr in ipairs(preds) do
+        if sc_dict.evaluate_ws_for_sc({sc = pr.props}, result_props) then return pr end
+    end
+    return nil
+end
+
+-- base (今までの選び方の結果) がトスになっていなければ、トスになる WS を選び直す。無ければ nil (= base のまま)
+local function toss_override(base)
+    if settings.toss == false or not base then return nil end
+    local now = safe_num(os.clock(), 0)
+    local preds = predicted_pt_ws(now)
+    if #preds == 0 then return nil end
+
+    local win = state.sc_active and safe_lt(now, safe_num(state.sc_expiration, 0)) and state.sc_property
+    if win and state.sc_target then
+        local t = windower.ffxi.get_mob_by_target('t')
+        if t and t.id ~= state.sc_target then win = false end
+    end
+    local prev = win and (state.sc_props or state.sc_property) or nil
+
+    local usable = usable_ws_set()
+    local first_idx
+    for idx, name in ipairs(state.ws_priority) do
+        if is_executable_ws(name, usable) then first_idx = idx break end
+    end
+
+    -- base 自身がトスになっているならそのまま
+    local base_info = sc_dict.find_ws_info(base.ws, state.active_weapon)
+    local base_props = (win and base.result_sc and base.result_sc ~= "なし" and base.result_sc ~= "始点")
+        and {base.result_sc} or (base_info and base_info.sc)
+    if base_props and toss_target(base_props, preds) then return nil end
+
+    for idx, name in ipairs(state.ws_priority) do
+        if name ~= base.ws and is_executable_ws(name, usable) and not (win and state.opener_only and idx == first_idx) then
+            local info = sc_dict.find_ws_info(name, state.active_weapon)
+            if info and info.sc then
+                local after, result
+                if win then
+                    local ev = sc_dict.evaluate_ws_for_sc(info, prev)
+                    if ev then
+                        local first_prev = type(prev) == "table" and prev[1] or prev
+                        if not sc_dict.is_terminal_chain(first_prev, ev.result) then
+                            after, result = {ev.result}, ev.result
+                        end
+                    end
+                else
+                    after, result = info.sc, "始点"
+                end
+                local pr = after and toss_target(after, preds)
+                if pr then
+                    return {
+                        ws = name,
+                        result_sc = result,
+                        priority = idx,
+                        reason = string.format("優先度%d [トス: %s の %s (あと約 %.0f 秒) に続けやすい %s]", idx, pr.actor, pr.ws, pr.eta, tostring(result))
+                    }
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- ---------------------------------------------------------------------------
+-- 全員が同じ敵を狙っているとき (作者の方針): トスも連携も難しいので、一番威力の高い WS を撃つ。
+--   選び方 (作者の指定): プライムウェポンならそのプライムWS (wiki.ffo.jp/html/39090.html)、
+--   エンピリアンウェポンならそのエンピリアンWS、それ以外は「クポフリートの秘術」で覚えるエンピリアンWS
+--   (wiki.ffo.jp/html/30062.html の武器種別の表)。侍の童子切安綱 = 照破 だけは作者の個別指定。
+--   どれも使えないとき (WS が使えない・武器種が不明) は優先リストの先頭。待ち時間なしで、TP が min_tp あれば撃つ。
+-- 「全員が同じ敵」= 同じパーティー (p1〜p5) の人 (フェイスは除く) のうち、敵を狙っている人が 1 人以上いて、
+--   全員が自分と同じ敵を狙っている (別の敵を狙っている人が 1 人もいない)。狙いは mob.target_index で見る (ゲーム内未確認)
+-- ---------------------------------------------------------------------------
+local FOCUS_WS_BY_WEAPON = {          -- 作者の個別指定 (武器の英語名)
+    ["Dojikiri Yasutsuna"] = "十二之太刀・照破",
+}
+local FOCUS_PRIME_BY_ITEM = {         -- プライムウェポン (日本語名) → プライムWS
+    ["ヴァルガプルニカワ"] = "マルカラ",        ["ンプガンドリング"] = "ルースレスストローク",
+    ["カリブルヌス"] = "インペラトル",          ["ヘルヘイム"] = "フィンブルヴェト",
+    ["スパリリソス"] = "ブリッツ",              ["ラフリア"] = "ディザスター",
+    ["フォエナリア"] = "ジ・オリジン",          ["ゲイブィード"] = "ダーマット",
+    ["慟哭"] = "是生滅法",                      ["草薙剣"] = "絶之太刀・無名",
+    ["ローグモル"] = "ダグダ",                  ["オパショーロ"] = "オシャラ",
+    ["ピナカ"] = "シャルヴ",                    ["アープ"] = "ジ・エンド",
+}
+local FOCUS_EMPYREAN_BY_TYPE = {      -- 武器種 → エンピリアンWS (クポフリートの秘術で覚える WS)
+    ["格闘"] = "ビクトリースマイト", ["短剣"] = "ルドラストーム",   ["片手剣"] = "シャンデュシニュ",
+    ["両手剣"] = "トアクリーバー",   ["片手斧"] = "クラウドスプリッタ", ["両手斧"] = "ウッコフューリー",
+    ["両手鎌"] = "クワイタス",       ["両手槍"] = "カムラン",       ["片手刀"] = "秘",
+    ["両手刀"] = "祖之太刀・不動",   ["片手棍"] = "ダガン",         ["両手棍"] = "ミルキル",
+    ["弓術"] = "ジシュヌの光輝",     ["射撃"] = "ワイルドファイア",
+}
+local focus_cache = {time = -1, value = false}
+
+local function all_same_target()
+    local now = safe_num(os.clock(), 0)
+    if now - focus_cache.time < 0.5 then return focus_cache.value end
+    focus_cache.time = now
+    local value, desc = false, "対象なし"
+    local t = windower.ffxi.get_mob_by_target('t')
+    local party = windower.ffxi.get_party()
+    local me = windower.ffxi.get_player()
+    if t and t.index and t.spawn_type == 16 and party and me then
+        local same, other, unknown = 0, 0, 0
+        for _, key in ipairs({"p1", "p2", "p3", "p4", "p5"}) do
+            local m = party[key]
+            local mob = m and m.mob
+            if mob and not mob.is_npc and mob.id ~= me.id then
+                local ti = mob.target_index
+                if ti == nil then
+                    unknown = unknown + 1
+                elseif ti > 0 then
+                    local tm = windower.ffxi.get_mob_by_index(ti)
+                    if tm and tm.spawn_type == 16 then
+                        if ti == t.index then same = same + 1 else other = other + 1 end
+                    end
+                end
+            end
+        end
+        value = same >= 1 and other == 0
+        desc = string.format("同じ敵 %d 人 / 別の敵 %d 人 / 狙いが分からない %d 人", same, other, unknown)
+    end
+    if value ~= focus_cache.value then
+        log_debug("FOCUS", string.format("全員が同じ敵: %s (%s)", value and "はい" or "いいえ", desc))
+    end
+    focus_cache.value = value
+    return value
+end
+
+local function focus_choice()
+    if settings.focus_max == false then return nil end
+    if not all_same_target() then return nil end
+    local usable = usable_ws_set()
+    local names = equipped_weapon_names()
+    -- 弓術・射撃の WS は飛び道具の枠の武器で決まる
+    local slot = (state.active_weapon == "弓術" or state.active_weapon == "射撃") and "range" or "main"
+    local main = names[slot]
+    local candidates = {
+        FOCUS_WS_BY_WEAPON[main or ""],
+        FOCUS_PRIME_BY_ITEM[names[slot .. "_ja"] or ""],
+        FOCUS_EMPYREAN_BY_TYPE[state.active_weapon or ""],
+    }
+    local ws
+    for i = 1, 3 do
+        if candidates[i] and is_executable_ws(candidates[i], usable) then ws = candidates[i] break end
+    end
+    if not ws then
+        for _, name in ipairs(state.ws_priority or {}) do
+            if is_executable_ws(name, usable) then ws = name break end
+        end
+    end
+    if not ws then return nil end
+    return {
+        ws = ws,
+        result_sc = "なし",
+        priority = 0,
+        no_wait = true,
+        need_full_tp = true,   -- TP が満タン (3000) になってから撃つ (作者の指定)
+        reason = string.format("全員が同じ敵: 最大威力 (%s)", tostring(main or "武器不明"))
+    }
+end
+
+local function find_best_ws_from_priority()
+    local focus = focus_choice()
+    if focus then return focus end
+    local base = find_base_ws_from_priority()
+    local tossed = toss_override(base)
+    return tossed or base
+end
+
 -- 自動連携判定＆WS自動実行ロジック (HUD表示ON/OFFに関わらず実行)
 local function process_auto_skillchain()
     local player = windower.ffxi.get_player()
@@ -770,7 +1063,17 @@ local function process_auto_skillchain()
     if settings.enabled and safe_gte(tp, min_tp) and safe_gt(now - last_ws, wait_delay) then
         local choice = find_best_ws_from_priority()
         -- フェイスが一人連携をしている間は割り込まない (終わってから撃つ)
-        if choice and follow_wait_left(now) <= 0 and solo_wait_left(now) <= 0 then
+        if choice and (choice.no_wait or follow_wait_left(now, tp) <= 0) and solo_wait_left(now) <= 0
+            and not (choice.need_full_tp and not safe_gte(tp, FULL_TP)) then
+            local in_range, dist, reach = ws_in_range(choice.ws)
+            if not in_range then
+                -- 届くまで撃たない。ログは 3 秒おき
+                if now - safe_num(state.range_log_time, 0) >= 3.0 then
+                    state.range_log_time = now
+                    log_debug("RANGE", string.format("%s は遠いので撃たない (距離 %.1f / 届く距離 %.1f)", choice.ws, dist, reach))
+                end
+                return
+            end
             state.last_ws_time = now
             state.pending_ws = {name = choice.ws, time = now, tp = tp}
             check_ws_usable(choice.ws, "EXECUTE")
@@ -852,7 +1155,7 @@ windower.register_event("prerender", guarded("PRERENDER", function()
 
             local choice = find_best_ws_from_priority()
             if choice then
-                local wait_left = math.max(follow_wait_left(now), solo_left)
+                local wait_left = math.max(choice.no_wait and 0 or follow_wait_left(now, tp), solo_left)
                 local wait_str = wait_left > 0 and string.format(" (あと %.1fs)", wait_left) or ""
                 table.insert(lines, string.format("次発動予定: %s%s", color_text(choice.ws, 100, 255, 150), wait_str))
                 table.insert(lines, string.format("評価判定: %s", color_text(choice.reason, 200, 200, 255)))
@@ -980,6 +1283,7 @@ local function clear_sc_state()
     state.sc_step = 0
     state.sc_aeonic = false
     state.solo_just_ended = false
+    state.sc_self_only = false
 end
 
 -- チャットの「技連携・○○」はパケットより数秒 (実測4〜7秒) 遅れて届くことがある。
@@ -1186,6 +1490,14 @@ local function handle_action_packet(data)
         -- パーティ外の人でも、自分が狙っている敵に撃った技は連携に関わる (七支公など、パーティ外と一緒に戦う敵)
         local t = (cat == 3 or cat == 11) and actor_mob and windower.ffxi.get_mob_by_target("t")
         if not (t and t.id == p["Target 1 ID"] and t.id ~= p["Actor"]) then return end
+    elseif not is_self and (cat == 3 or cat == 11) then
+        -- パーティの人でも、自分が狙っている敵と別の敵への技は連携に関わらない
+        -- (リンバスなど、敵を多量にリンクさせて個別に倒す場所では、仲間は別の敵と戦っている)
+        local t = windower.ffxi.get_mob_by_target("t")
+        if t and t.id ~= p["Target 1 ID"] then
+            state.other_mob_ignored = safe_num(state.other_mob_ignored, 0) + 1
+            return
+        end
     end
     local actor_name = (outsider and "(PT外) " or "") .. tostring(actor_mob.name or "")
     local param = safe_num(p["Param"], 0)
@@ -1246,8 +1558,16 @@ local function handle_action_packet(data)
         return
     end
 
+    local kind = is_self and "self" or ((actor_mob and actor_mob.spawn_type == 14) and "trust" or "player")
+    if kind == "player" and cat == 3 and landed then
+        record_pt_ws(p["Actor"], actor_name, ability_name(cat, param))
+    end
+
     if chain then
+        local self_only = state.sc_self_only and is_self
         apply_chain_result(chain, actor_name, "PACKET_SC", target_id, close_reason)
+        state.sc_self_only = self_only   -- 他の人の WS が一度でも入ったら、この連携は自分だけのものではない
+        state.sc_last_kind = kind
         return
     end
 
@@ -1287,6 +1607,8 @@ local function handle_action_packet(data)
         state.sc_expiration = safe_num(os.clock(), 0) + sc_window_sec(0)
         state.sc_start_time = safe_num(os.clock(), 0)
         state.sc_starter = actor_name
+        state.sc_self_only = is_self   -- 自分の始点なら、ここから自分だけの連携
+        state.sc_last_kind = kind
         log_debug("PACKET_SC", string.format("Opener: %s from %s (Category: %d / Param: %d)", state.sc_property, actor_name, cat, param))
     end
 end
@@ -1357,12 +1679,14 @@ end))
 -- エリア移動時は連携窓を破棄する (移動先で前エリアの属性を使わないため)
 windower.register_event("zone change", guarded("ZONE", function()
     clear_sc_state()
+    pt_hist = {}
     state.pending_ws = nil
     state.solos = {}
     flush_log()
 end))
 windower.register_event("logout", guarded("LOGOUT", function()
     clear_sc_state()
+    pt_hist = {}
     state.pending_ws = nil
     state.solos = {}
     state.player_id = nil
@@ -1471,14 +1795,58 @@ windower.register_event("addon command", guarded("CMD", function(cmd, ...)
     elseif cmd == "minfollow" then
         -- 直前のWSから次の自動WSまでの最短秒数: //omni minfollow <秒>
         local sec = tonumber(sub)
-        if sec and sec >= 0 and sec <= 8 then
+        if sec and sec >= MIN_FOLLOW_FLOOR and sec <= 8 then
             settings.min_follow = sec
             config.save(settings)
         elseif sub then
-            chat_msg("[OmniChain] 秒数は 0〜8 で指定してください (例: //omni minfollow 3.3)。")
+            chat_msg("[OmniChain] 秒数は 4〜8 で指定してください (例: //omni minfollow 4)。")
         end
-        chat_msg(string.format("[OmniChain] 直前のWSから次の自動WSまでの最短: %.1f 秒", safe_num(settings.min_follow, 3.3)))
+        chat_msg(string.format("[OmniChain] 直前のWSから次の自動WSまでの最短: %.1f 秒", math.max(MIN_FOLLOW_FLOOR, safe_num(settings.min_follow, MIN_FOLLOW_FLOOR))))
         log_debug("CMD", "Min follow: " .. tostring(settings.min_follow))
+
+    elseif cmd == "focus" then
+        -- 全員が同じ敵を狙っているときは最大威力の WS: //omni focus [on|off]
+        if sub == "on" or sub == "off" then
+            settings.focus_max = (sub == "on")
+            config.save(settings)
+        end
+        chat_msg(string.format("[OmniChain] 全員が同じ敵のとき最大威力の WS: %s (プライム武器ならそのWS、それ以外はエンピリアンWS。侍の童子切安綱は照破)",
+            settings.focus_max ~= false and "ON" or "OFF"))
+        log_debug("CMD", "Focus: " .. tostring(settings.focus_max))
+
+    elseif cmd == "toss" then
+        -- PT の人へのトス: //omni toss [on|off]
+        if sub == "on" or sub == "off" then
+            settings.toss = (sub == "on")
+            config.save(settings)
+        end
+        chat_msg(string.format("[OmniChain] PT の人へのトス: %s (近いときだけ、相手の次の WS を予測して属性を合わせる)",
+            settings.toss ~= false and "ON" or "OFF"))
+        log_debug("CMD", "Toss: " .. tostring(settings.toss))
+
+    elseif cmd == "reach" then
+        -- 近接 WS を撃ってよい距離 (distanceplus に出る数字): //omni reach <距離>
+        local d = tonumber(sub)
+        if d and d >= 1 and d <= 8 then
+            settings.ws_reach = d
+            config.save(settings)
+        elseif sub then
+            chat_msg("[OmniChain] 距離は 1〜8 で指定してください (例: //omni reach 3.5)。")
+        end
+        chat_msg(string.format("[OmniChain] 近接 WS を撃つ距離: %.1f 以下 (distanceplus の数字)", safe_num(settings.ws_reach, 3.5)))
+        log_debug("CMD", "WS reach: " .. tostring(settings.ws_reach))
+
+    elseif cmd == "openpt" then
+        -- 前の WS が自分・PT の人のときの、受付が開くまでの秒数 (試験用): //omni openpt <秒>
+        local sec = tonumber(sub)
+        if sec and sec >= 0.5 and sec <= 3.3 then
+            settings.open_player = sec
+            config.save(settings)
+        elseif sub then
+            chat_msg("[OmniChain] 秒数は 0.5〜3.3 で指定してください (3.3 = 今までどおり)。")
+        end
+        chat_msg(string.format("[OmniChain] 前の WS が人 (自分・PT) のときの受付: %.1f 秒 (フェイスは 3.3 秒)", safe_num(settings.open_player, SC_OPEN_SEC)))
+        log_debug("CMD", "Open player: " .. tostring(settings.open_player))
 
     elseif cmd == "solo" then
         -- フェイスの一人連携待ち: //omni solo [on|off] / start <秒> / gap <秒>
