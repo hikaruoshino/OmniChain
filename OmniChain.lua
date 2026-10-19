@@ -1,10 +1,10 @@
 -- =============================================================================
--- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.4.0 - 別の敵を無視・最大威力・トス)
+-- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.4.1 - 同じ敵を狙う人が多いときの最大威力)
 -- =============================================================================
 
 _addon.name     = "OmniChain"
 _addon.author   = "hikaruoshino"
-_addon.version  = "7.4.0"
+_addon.version  = "7.4.1"
 _addon.commands = {"omni", "omnichain"}
 
 require("luau")
@@ -55,6 +55,8 @@ defaults.wait_delay = 1.2
 defaults.start_mode = "auto"  -- "auto": 1回目も自動 / "manual": 1回目は自分 (誰かの始点に続けて自動連携)
 defaults.follow_wait = 6.0    -- manual: 直前のWSが当たってから自動WSを撃つまでの秒数 (他人の横槍を待つ)
 defaults.open_player = 3.3    -- 前の WS が自分・PT の人 (フェイス以外) のとき、受付が開くまでと見なす秒数 (試験用。フェイスは 3.3 秒のまま)
+defaults.focus_people = 3     -- 同じ敵を狙っている人が、自分を含めてこの人数以上のとき、最大威力の WS (2 人なら普通に連携のほうが強い)
+defaults.focus_tp = 1500       -- 最大威力の WS を撃つ TP
 defaults.focus_max = true      -- 同じ敵を PT の人全員が狙っているときは、連携・トスをやめて一番威力の高い WS を撃つ (侍)
 defaults.toss = true          -- PT の人の次の WS を予測し、近いときはその人が連携しやすい属性になる WS を選ぶ
 defaults.ws_reach = 3.5       -- 近接 WS (射程 2) を撃ってよい距離。distanceplus に出る数字 (敵の大きさは引かない)
@@ -949,8 +951,9 @@ end
 --   エンピリアンウェポンならそのエンピリアンWS、それ以外は「クポフリートの秘術」で覚えるエンピリアンWS
 --   (wiki.ffo.jp/html/30062.html の武器種別の表)。侍の童子切安綱 = 照破 だけは作者の個別指定。
 --   どれも使えないとき (WS が使えない・武器種が不明) は優先リストの先頭。待ち時間なしで、TP が min_tp あれば撃つ。
--- 「全員が同じ敵」= 同じパーティー (p1〜p5) の人 (フェイスは除く) のうち、敵を狙っている人が 1 人以上いて、
---   全員が自分と同じ敵を狙っている (別の敵を狙っている人が 1 人もいない)。狙いは mob.target_index で見る (ゲーム内未確認)
+-- 「同じ敵を狙っている人が多い」= パーティーとアライアンス (p1〜p5・a10〜a15・a20〜a25) の人 (フェイスは除く) のうち、
+--   自分と同じ敵を狙っている人が、自分を含めて settings.focus_people (既定 3) 人以上。別の敵を狙っている人がいても数える。
+--   狙いは mob.target_index で見る
 -- ---------------------------------------------------------------------------
 local FOCUS_WS_BY_WEAPON = {          -- 作者の個別指定 (武器の英語名)
     ["Dojikiri Yasutsuna"] = "十二之太刀・照破",
@@ -972,6 +975,8 @@ local FOCUS_EMPYREAN_BY_TYPE = {      -- 武器種 → エンピリアンWS (ク
     ["弓術"] = "ジシュヌの光輝",     ["射撃"] = "ワイルドファイア",
 }
 local focus_cache = {time = -1, value = false}
+local FOCUS_PARTY_KEYS = {"p1", "p2", "p3", "p4", "p5", "a10", "a11", "a12", "a13", "a14", "a15",
+    "a20", "a21", "a22", "a23", "a24", "a25"}
 
 local function all_same_target()
     local now = safe_num(os.clock(), 0)
@@ -983,7 +988,7 @@ local function all_same_target()
     local me = windower.ffxi.get_player()
     if t and t.index and t.spawn_type == 16 and party and me then
         local same, other, unknown = 0, 0, 0
-        for _, key in ipairs({"p1", "p2", "p3", "p4", "p5"}) do
+        for _, key in ipairs(FOCUS_PARTY_KEYS) do
             local m = party[key]
             local mob = m and m.mob
             if mob and not mob.is_npc and mob.id ~= me.id then
@@ -998,11 +1003,11 @@ local function all_same_target()
                 end
             end
         end
-        value = same >= 1 and other == 0
-        desc = string.format("同じ敵 %d 人 / 別の敵 %d 人 / 狙いが分からない %d 人", same, other, unknown)
+        value = same + 1 >= math.max(2, safe_num(settings.focus_people, 3))
+        desc = string.format("同じ敵 %d 人 (自分を入れて %d 人) / 別の敵 %d 人 / 狙いが分からない %d 人", same, same + 1, other, unknown)
     end
     if value ~= focus_cache.value then
-        log_debug("FOCUS", string.format("全員が同じ敵: %s (%s)", value and "はい" or "いいえ", desc))
+        log_debug("FOCUS", string.format("同じ敵を狙う人が多い: %s (%s)", value and "はい" or "いいえ", desc))
     end
     focus_cache.value = value
     return value
@@ -1036,8 +1041,8 @@ local function focus_choice()
         result_sc = "なし",
         priority = 0,
         no_wait = true,
-        need_full_tp = true,   -- TP が満タン (3000) になってから撃つ (作者の指定)
-        reason = string.format("全員が同じ敵: 最大威力 (%s)", tostring(main or "武器不明"))
+        min_tp = math.max(safe_num(settings.min_tp, 1000), safe_num(settings.focus_tp, 1500)),   -- この TP になってから撃つ
+        reason = string.format("同じ敵を狙う人が多い: 最大威力 (%s)", tostring(main or "武器不明"))
     }
 end
 
@@ -1064,7 +1069,10 @@ local function process_auto_skillchain()
         local choice = find_best_ws_from_priority()
         -- フェイスが一人連携をしている間は割り込まない (終わってから撃つ)
         if choice and (choice.no_wait or follow_wait_left(now, tp) <= 0) and solo_wait_left(now) <= 0
-            and not (choice.need_full_tp and not safe_gte(tp, FULL_TP)) then
+            and not (choice.min_tp and not safe_gte(tp, choice.min_tp)) then
+            -- 敵が画面に描かれていない・遠すぎて対象にできないとき (「対象が見えない」) は撃たない
+            local target_now = windower.ffxi.get_mob_by_target('t')
+            if target_now and target_now.valid_target == false then return end
             local in_range, dist, reach = ws_in_range(choice.ws)
             if not in_range then
                 -- 届くまで撃たない。ログは 3 秒おき
@@ -1804,8 +1812,32 @@ windower.register_event("addon command", guarded("CMD", function(cmd, ...)
         chat_msg(string.format("[OmniChain] 直前のWSから次の自動WSまでの最短: %.1f 秒", math.max(MIN_FOLLOW_FLOOR, safe_num(settings.min_follow, MIN_FOLLOW_FLOOR))))
         log_debug("CMD", "Min follow: " .. tostring(settings.min_follow))
 
+    elseif cmd == "focuspeople" then
+        -- 最大威力の WS にする人数 (自分を含む): //omni focuspeople <人数>
+        local v = tonumber(sub)
+        if v and v >= 2 and v <= 18 then
+            settings.focus_people = math.floor(v)
+            config.save(settings)
+        elseif sub then
+            chat_msg("[OmniChain] 人数は 2〜18 で指定してください (例: //omni focuspeople 3)。")
+        end
+        chat_msg(string.format("[OmniChain] 同じ敵を狙っている人が自分を入れて %d 人以上のとき、最大威力の WS", safe_num(settings.focus_people, 3)))
+        log_debug("CMD", "Focus people: " .. tostring(settings.focus_people))
+
+    elseif cmd == "focustp" then
+        -- 最大威力の WS を撃つ TP: //omni focustp <TP>
+        local v = tonumber(sub)
+        if v and v >= 1000 and v <= 3000 then
+            settings.focus_tp = v
+            config.save(settings)
+        elseif sub then
+            chat_msg("[OmniChain] TP は 1000〜3000 で指定してください (例: //omni focustp 1500)。")
+        end
+        chat_msg(string.format("[OmniChain] 最大威力の WS を撃つ TP: %d 以上", safe_num(settings.focus_tp, 1500)))
+        log_debug("CMD", "Focus TP: " .. tostring(settings.focus_tp))
+
     elseif cmd == "focus" then
-        -- 全員が同じ敵を狙っているときは最大威力の WS: //omni focus [on|off]
+        -- 同じ敵を狙っている人が多いときは最大威力の WS: //omni focus [on|off]
         if sub == "on" or sub == "off" then
             settings.focus_max = (sub == "on")
             config.save(settings)
