@@ -14,6 +14,8 @@ v7.1.0 では、連携判定とWSの連携属性を wiki（[FF11用語辞典](ht
 
 👉 **[https://github.com/hikaruoshino/OmniChain](https://github.com/hikaruoshino/OmniChain)**
 
+🌐 English edition / 英語版: **[https://github.com/hikaruoshino/OmniChain-EN](https://github.com/hikaruoshino/OmniChain-EN)**
+
 ---
 
 ## 🌟 主な機能
