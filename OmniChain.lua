@@ -1,10 +1,10 @@
 -- =============================================================================
--- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.4.1 - 同じ敵を狙う人が多いときの最大威力)
+-- OmniChain.lua : 全22ジョブ ＆ 全14武器種対応 自動技連携アドオン (v7.4.2 - 同じ敵を狙う人が多いときの最大威力)
 -- =============================================================================
 
 _addon.name     = "OmniChain"
 _addon.author   = "hikaruoshino"
-_addon.version  = "7.4.1"
+_addon.version  = "7.4.2"
 _addon.commands = {"omni", "omnichain"}
 
 require("luau")
@@ -373,6 +373,7 @@ local WS_RANGE_MULT = {
     [8] = 1.25, [9] = 1.377778, [10] = 1.45, [11] = 1.454545454545455, [12] = 1.666666666666667,
 }
 local WS_RANGE_MARGIN = 0.2   -- 境目で入力が間に合わず空振りしないよう、届く距離より少し内側を使う
+-- 近接 WS (射程 2) は、固定の ws_reach (既定 3.5) 以下のとき。敵の model_size が 2 を超える大きな敵は、超えた分だけ広げる
 -- 戻り値: 届くなら true, 届かないなら false と (距離, 届く距離)。調べられないときは true
 local function ws_in_range(ws_name)
     local id = ws_id_by_name(ws_name)
@@ -384,6 +385,12 @@ local function ws_in_range(ws_name)
         if not t or not t.distance then return true end
         local melee_reach = safe_num(settings.ws_reach, 3.5)
         local d = math.sqrt(safe_num(t.distance, 0))
+        -- 大きな敵は、体の分だけ遠くから届く。敵の model_size が 2 を超えた分だけ、撃ってよい距離を広げる
+        -- (小さい敵・普通の敵は今までの固定値のまま。2026-10-24 Awoken Gorgimera: 距離 4.5 で手動の WS は通ったのに、3.5 の固定値で撃たず止まった)
+        if t.model_size then
+            local extra = safe_num(t.model_size, 0) - 2.0
+            if extra > 0 then melee_reach = melee_reach + extra end
+        end
         return d <= melee_reach, d, melee_reach
     end
     local me = windower.ffxi.get_mob_by_target('me') or windower.ffxi.get_player()
@@ -1070,9 +1077,8 @@ local function process_auto_skillchain()
         -- フェイスが一人連携をしている間は割り込まない (終わってから撃つ)
         if choice and (choice.no_wait or follow_wait_left(now, tp) <= 0) and solo_wait_left(now) <= 0
             and not (choice.min_tp and not safe_gte(tp, choice.min_tp)) then
-            -- 敵が画面に描かれていない・遠すぎて対象にできないとき (「対象が見えない」) は撃たない
-            local target_now = windower.ffxi.get_mob_by_target('t')
-            if target_now and target_now.valid_target == false then return end
+            -- 「対象が見えない」でゲームに断られた直後は 2 秒待つ (敵の「対象にできる」という値は、大きな敵で当てにならないことがあるので、事前の判定には使わない)
+            if now < safe_num(state.unseen_until, 0) then return end
             local in_range, dist, reach = ws_in_range(choice.ws)
             if not in_range then
                 -- 届くまで撃たない。ログは 3 秒おき
@@ -1630,6 +1636,7 @@ local function handle_message_packet(data)
     if FAIL_MESSAGES[msg] and state.pending_ws and p["Actor"] == state.player_id then
         log_event("WARN", "WS_FAIL", string.format("%s: %s (msg %d)", state.pending_ws.name, FAIL_MESSAGES[msg], msg))
         state.pending_ws = nil
+        if FAIL_MESSAGES[msg] == "対象が見えない" then state.unseen_until = safe_num(os.clock(), 0) + 2.0 end
     end
 end
 
