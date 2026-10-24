@@ -286,3 +286,9 @@ OmniChain/
   * からくり士オートマトンWS（12種）および召喚士契約の履行（30種）の連携判定追尾エンジンを新設。
 * **v6.0.0 (2026-10-01)**
   * 初版リリース。全14武器種自動連携エンジンおよびHUD 搭載。
+
+## 不具合・動作報告 / Feedback
+
+「動きました」の一言だけでも歓迎です。GitHub のアカウントがあれば、[Issues](../../issues/new/choose) から書き込めます (日本語・英語どちらでも)。
+
+A one-line "it works" is welcome too. With a GitHub account you can post from [Issues](../../issues/new/choose) (Japanese or English).
