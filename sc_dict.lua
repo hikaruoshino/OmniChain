@@ -434,8 +434,8 @@ function sc_dict.find_ws_info(ws_name, weapon_hint)
         return { ja = ws_name, en = ws_name, sc = sc_dict.SMN_BP_DATABASE[ws_name] }
     end
 
-    -- 4. 見つからない場合のデフォルト仮定義
-    return { ja = ws_name, en = ws_name, sc = {"核熱", "重力", "分解", "湾曲"} }
+    -- 4. 見つからない場合は nil (連携できない技として扱う。呼び出し側は nil を見ている)
+    return nil
 end
 
 -- 連携判定関数: 直前の属性 (prev_sc) に WS (ws_info) を打った場合に発生する連携を算出
