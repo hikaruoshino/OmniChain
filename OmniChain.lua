@@ -361,7 +361,7 @@ local state = {
 -- 自動実行したWSの応答が無いまま、この秒数を過ぎたら警告する (WS名の誤り・未習得・入力エラー等)
 local PENDING_WS_TIMEOUT = 4.0
 
--- sc_dict に載っているか (find_ws_info は未登録でも既定値を返すため別に調べる)
+-- sc_dict に載っているか (find_ws_info は PUP / SMN の技も返すため、WEAPON_WS と合わせて別に調べる)
 local function ws_in_dict(ws_name)
     for _, ws_list in pairs(sc_dict.WEAPON_WS) do
         for _, info in ipairs(ws_list) do
@@ -490,7 +490,7 @@ local function check_ws_usable(ws_name, category)
     end
     local good = true
     if not ws_in_dict(ws_name) then
-        log_event("WARN", category, string.format("sc_dict に無いWS: %s (連携判定は既定値で行われます)", ws_name))
+        log_event("WARN", category, string.format("sc_dict に無いWS: %s (連携の計算には使われません。始点としては撃つことがあります)", ws_name))
         good = false
     end
     local id = ws_id_by_name(ws_name)
